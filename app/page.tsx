@@ -27,7 +27,8 @@ const recipeTypes = [
   { value: "sweet_bake", label: "מאפה מתוק", icon: "🍰" },
   { value: "meat", label: "בשר", icon: "🥩" },
   { value: "fish", label: "דגים", icon: "🐟" },
-  { value: "quiche_savory", label: "קיש או פשטידה מלוחה", icon: "🥧" },
+  { value: "quiche_savory", label: "קיש — עם בסיס בצק", icon: "🥧" },
+  { value: "savory_casserole", label: "פשטידה מלוחה — ללא בסיס", icon: "🍲" },
   { value: "pie_sweet", label: "פשטידה או טארט מתוק", icon: "🍮" },
 ];
 const ingredientSuggestions = ["קמח", "ביצים", "גבינה", "עגבניות", "קישואים", "תרד", "שמנת", "עוף"];
@@ -59,7 +60,10 @@ function mealIngredients(meal: Meal) {
   }).filter((item): item is { name: string; measure: string } => Boolean(item));
 }
 function restrictionHits(meal: Meal, key: RestrictionKey) {
-  return mealIngredients(meal).map((item) => item.name).filter((name) => triggerPatterns[key].test(name));
+  return mealIngredients(meal).map((item) => item.name).filter((name) => {
+    if (key === "gluten" && /gluten[- ]?free flour|almond flour|coconut flour|rice flour|corn flour|cornstarch|tamari|קמח ללא גלוטן|קמח שקדים|קמח קוקוס|קמח אורז|קמח תירס|קורנפלור|טמארי/i.test(name)) return false;
+    return triggerPatterns[key].test(name);
+  });
 }
 function parseNumber(value: string): number | null {
   const cleaned = value.trim().replace(/[¼]/g, " 1/4").replace(/[½]/g, " 1/2").replace(/[¾]/g, " 3/4");
@@ -154,7 +158,7 @@ export default function Home() {
     [form.restrictions],
   );
   const visibleMeals = useMemo(() => meals.filter((meal) => activeRestrictions.every((key) => (
-    form.restrictions[key] !== "strict" || restrictionHits(meal, key).length === 0
+    (key !== "gluten" && form.restrictions[key] !== "strict") || restrictionHits(meal, key).length === 0
   ))), [meals, activeRestrictions, form.restrictions]);
 
   async function translateBatch(texts: string[], source = "en") {
@@ -169,9 +173,10 @@ export default function Home() {
     event.preventDefault(); setLoading(true); setError(""); setSelected(null); setTranslatingTitles(false);
     try {
       const params = new URLSearchParams({
-        v: "3",
+        v: "4",
         type: form.type, query: form.query, language: form.language,
         ingredients: form.ingredients.join("|"),
+        restrictions: Object.entries(form.restrictions).filter(([, mode]) => mode !== "off").map(([key, mode]) => `${key}:${mode}`).join("|"),
       });
       const response = await fetch(`/api/recipes?${params}`);
       const payload = (await response.json()) as { meals?: Meal[]; error?: string; ingredientMatches?: Record<string, number> };
@@ -323,7 +328,7 @@ export default function Home() {
           <div className="selected-products">{form.ingredients.map((ingredient) => <span key={ingredient}>{ingredient}<button type="button" aria-label={`הסר ${ingredient}`} onClick={() => removeIngredient(ingredient)}>×</button></span>)}{!form.ingredients.length && <small>עדיין לא נבחרו מוצרים — אפשר לחפש גם לפי סוג המתכון בלבד.</small>}</div>
           <div className="suggestion-row"><b>הוספה מהירה:</b>{ingredientSuggestions.map((ingredient) => <button type="button" key={ingredient} disabled={form.ingredients.includes(ingredient) || form.ingredients.length >= 5} onClick={() => addIngredient(ingredient)}>{ingredient}</button>)}</div>
         </div></section>
-          <section className="workflow-card"><div className="section-heading"><span>3</span><div><h2>העדפות ורגישויות</h2><p>בחר את רמת ההתאמה</p></div></div><div className="restriction-grid">{(Object.keys(restrictionLabels) as RestrictionKey[]).map((key) => <div className={`restriction-card ${form.restrictions[key] !== "off" ? "active" : ""}`} key={key}><div><b>{restrictionLabels[key].title}</b><small>{restrictionLabels[key].note}</small></div><select aria-label={`רמת ${restrictionLabels[key].title}`} value={form.restrictions[key]} onChange={(event) => setForm({ ...form, restrictions: { ...form.restrictions, [key]: event.target.value as RestrictionMode } })}><option value="off">לא נדרש</option><option value="preference">העדפה</option><option value="strict">רגישות / אלרגיה</option></select></div>)}</div><p className="safety-caption">רגישות מחמירה מסננת רכיבים ברורים, אך אינה מחליפה בדיקה רפואית.</p></section>
+          <section className="workflow-card"><div className="section-heading"><span>3</span><div><h2>העדפות ורגישויות</h2><p>בחר את רמת ההתאמה</p></div></div><div className="restriction-grid">{(Object.keys(restrictionLabels) as RestrictionKey[]).map((key) => <div className={`restriction-card ${form.restrictions[key] !== "off" ? "active" : ""}`} key={key}><div><b>{restrictionLabels[key].title}</b><small>{restrictionLabels[key].note}</small></div><select aria-label={`רמת ${restrictionLabels[key].title}`} value={form.restrictions[key]} onChange={(event) => setForm({ ...form, restrictions: { ...form.restrictions, [key]: event.target.value as RestrictionMode } })}><option value="off">לא נדרש</option>{key === "gluten" ? <option value="strict">חובה — ללא גלוטן</option> : <><option value="preference">העדפה</option><option value="strict">רגישות / אלרגיה</option></>}</select></div>)}</div><p className="safety-caption">ללא גלוטן הוא תנאי חובה ומסנן תוצאות. רגישויות אחרות במצב מחמיר מסננות רכיבים ברורים, אך אינן מחליפות בדיקה רפואית.</p></section>
         </div>
         <button className="primary-button" disabled={loading} type="submit">{loading ? <LoaderCircle className="spin" size={19} /> : <Search size={19} />}{loading ? "מחפש ומתאים..." : "מצא מתכונים לפי הבחירות"}</button>
       </form>

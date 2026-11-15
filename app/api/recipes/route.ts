@@ -11,6 +11,7 @@ const typeSearch: Record<string, { categories?: string[]; terms?: string[] }> = 
   sweet_bake: { categories: ["Dessert"] },
   savory_bake: { terms: ["pie", "tart"] },
   quiche_savory: { terms: ["pie"] },
+  savory_casserole: { terms: ["casserole", "frittata"] },
   pie_sweet: { terms: ["pie", "tart"], categories: ["Dessert"] },
 };
 
@@ -59,17 +60,30 @@ function matchesRequestedType(meal: Meal, type: string) {
     .join(" ")
     .toLowerCase();
   const all = `${title} ${category} ${tags} ${ingredients}`;
+  const instructions = (meal.strInstructions ?? "").toLowerCase();
   const sweetSignals = /dessert|sweet|cake|chocolate|cocoa|custard|jam|caramel|apple|berry|strawberry|blueberry|raspberry|cherry|banana|lemon curd|treacle|קינוח|מתוק|עוג|שוקולד|קקאו|ריבה|קרמל|תפוח|תות|דובדבן|בננה/i;
   const savorySignals = /beef|chicken|lamb|pork|fish|salmon|tuna|cheese|onion|garlic|spinach|mushroom|tomato|potato|leek|broccoli|zucchini|courgette|בשר|עוף|טלה|דג|סלמון|טונה|גבינ|בצל|שום|תרד|פטריות|עגבני|תפוח אדמה|כרישה|ברוקולי|קישוא/i;
   const isSweet = category === "dessert" || sweetSignals.test(`${title} ${category} ${tags}`);
 
   if (type === "cakes") return /cakes?|עוגה|עוגת|עוגות|קייק/i.test(title);
-  if (type === "sweet_bake") return isSweet;
+  if (type === "sweet_bake") {
+    const sweetBakedForm = /cake|pie|tart|pastry|cookie|biscuit|brownie|muffin|bread|bun|roll|galette|עוג|פאי|טארט|מאפה|עוגי|בראוני|מאפין|שמרים|לחם|לחמנ|רולדה|גאלט/i.test(title);
+    return isSweet && sweetBakedForm && !/salad|סלט/i.test(title);
+  }
   if (type === "savory_bake") {
-    return !isSweet && (/pie|tart|pastry|roll|מאפה|פשטידה|קיש|בורקס|טארט|פאי/i.test(title) || savorySignals.test(all));
+    const excludedDish = /salad|sandwich|bruschetta|toast|soup|gazpacho|סלט|כריך|ברוסקטה|טוסט|מרק|גספצ/i.test(title);
+    const bakedForm = /pie|tart|pastry|quiche|bread|focaccia|pizza|calzone|galette|bun|roll|מאפה|פשטידה|קיש|בורקס|טארט|פאי|לחם|לחמנ|פוקאצ|פיצה|קלצונה|גאלט|שבלול/i.test(title);
+    return !isSweet && !excludedDish && bakedForm;
   }
   if (type === "quiche_savory") {
-    return !isSweet && (/quiche|pie|tart|קיש|פשטידה|טארט|פאי/i.test(title) || savorySignals.test(all));
+    const quicheForm = /quiche|savory tart|קיש|טארט מלוח/i.test(title);
+    const bakedBase = /pastry|crust|dough|flour|shortcrust|בצק|קלתית|קמח|פריך/i.test(`${ingredients} ${instructions}`);
+    return !isSweet && quicheForm && bakedBase;
+  }
+  if (type === "savory_casserole") {
+    const casseroleForm = /casserole|frittata|pudding|פשטידה|פשטידת|פריטטה/i.test(title);
+    const bakedBase = /pastry|crust|dough|shortcrust|בצק|קלתית/i.test(`${ingredients} ${instructions}`);
+    return !isSweet && casseroleForm && !bakedBase;
   }
   if (type === "pie_sweet") {
     return isSweet && /pie|tart|pudding|פאי|טארט|פשטידה/i.test(title);
@@ -194,6 +208,10 @@ export async function GET(request: Request) {
     .map((item) => item.trim().slice(0, 40))
     .filter(Boolean)
     .slice(0, 5);
+  const mandatoryRestrictions = (searchParams.get("restrictions") || "").split("|").filter((item) => {
+    const [key, mode] = item.split(":");
+    return (key === "gluten" && mode !== "off") || ((key === "dairy" || key === "lowcarb") && mode === "strict");
+  }).map((item) => item.split(":")[0]);
   const config = typeSearch[type] ?? typeSearch.fish;
 
   try {
@@ -322,7 +340,17 @@ export async function GET(request: Request) {
         normalizeSearchText(names).includes(normalizeSearchText(ingredient)),
       ).length;
     }
-    const combinedSource = hashulchanResults.length ? hashulchanResults : typedResults;
+    const violatesRestriction = (meal: Meal, key: string) => {
+      const names = Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "");
+      if (key === "gluten") return names.some((name) => {
+        if (/gluten[- ]?free flour|almond flour|coconut flour|rice flour|corn flour|cornstarch|tamari|קמח ללא גלוטן|קמח שקדים|קמח קוקוס|קמח אורז|קמח תירס|קורנפלור|טמארי/i.test(name)) return false;
+        return /flour|wheat|bread|breadcrumbs|pasta|spaghetti|noodle|couscous|barley|semolina|soy sauce|tortilla|cracker|pastry|קמח|חיטה|לחם|פירורי לחם|פסטה|אטריות|קוסקוס|שעורה|סולת|רוטב סויה|טורטייה/i.test(name);
+      });
+      if (key === "dairy") return names.some((name) => /milk|cheese|butter|cream|yogurt|whey|mascarpone|mozzarella|parmesan|cheddar|feta|ricotta|חלב|גבינ|חמאה|שמנת|יוגורט|מסקרפונה|מוצרלה|פרמזן|פטה|ריקוטה/i.test(name));
+      return names.some((name) => /sugar|honey|syrup|flour|bread|rice|potato|pasta|noodle|couscous|corn|beans|lentil|oats|barley|chocolate|סוכר|דבש|סירופ|קמח|לחם|אורז|תפוח אדמה|פסטה|אטריות|קוסקוס|תירס|שעועית|עדשים|שיבולת שועל|שעורה|שוקולד/i.test(name));
+    };
+    const combinedSource = (hashulchanResults.length ? hashulchanResults : typedResults)
+      .filter((meal) => mandatoryRestrictions.every((key) => !violatesRestriction(meal, key)));
     const combined = [...combinedSource]
       .filter((meal, index, list) => list.findIndex((candidate) => normalizeSearchText(candidate.strMeal) === normalizeSearchText(meal.strMeal)) === index)
       .sort((a, b) => {
