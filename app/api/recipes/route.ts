@@ -9,11 +9,37 @@ const typeSearch: Record<string, { categories?: string[]; terms?: string[] }> = 
   fish: { categories: ["Seafood"] },
   sweet_bake: { categories: ["Dessert"] },
   savory_bake: { terms: ["pie", "tart"] },
-  quiche_savory: { terms: ["quiche", "savory pie"] },
+  quiche_savory: { terms: ["pie"] },
   pie_sweet: { terms: ["pie", "tart"], categories: ["Dessert"] },
 };
 
 type Meal = Record<string, string | null> & { idMeal: string; strMeal: string };
+
+function matchesRequestedType(meal: Meal, type: string) {
+  const title = meal.strMeal.toLowerCase();
+  const category = (meal.strCategory ?? "").toLowerCase();
+  const tags = (meal.strTags ?? "").toLowerCase();
+  const ingredients = Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "")
+    .join(" ")
+    .toLowerCase();
+  const all = `${title} ${category} ${tags} ${ingredients}`;
+  const sweetSignals = /\b(dessert|sweet|cake|chocolate|cocoa|custard|jam|caramel|apple|berry|strawberry|blueberry|raspberry|cherry|banana|lemon curd|treacle)\b/i;
+  const savorySignals = /\b(beef|chicken|lamb|pork|fish|salmon|tuna|cheese|onion|garlic|spinach|mushroom|tomato|potato|leek|broccoli|zucchini|courgette)\b/i;
+  const isSweet = category === "dessert" || sweetSignals.test(`${title} ${category} ${tags}`);
+
+  if (type === "cakes") return /\bcakes?\b/i.test(title);
+  if (type === "sweet_bake") return isSweet;
+  if (type === "savory_bake") {
+    return !isSweet && (/\b(pie|tart|pastry|roll)\b/i.test(title) || savorySignals.test(all));
+  }
+  if (type === "quiche_savory") {
+    return !isSweet && (/\b(quiche|pie|tart)\b/i.test(title) || savorySignals.test(all));
+  }
+  if (type === "pie_sweet") {
+    return isSweet && /\b(pie|tart|pudding)\b/i.test(title);
+  }
+  return true;
+}
 
 async function getJson(url: string) {
   const response = await fetch(url, {
@@ -147,13 +173,11 @@ export async function GET(request: Request) {
       }).length;
     }
     complete.sort((a, b) => (ingredientMatches[b.idMeal] ?? 0) - (ingredientMatches[a.idMeal] ?? 0));
-    const typedResults = type === "cakes"
-      ? complete.filter((meal) => /\bcakes?\b/i.test(meal.strMeal))
-      : complete;
+    const typedResults = complete.filter((meal) => matchesRequestedType(meal, type));
 
     return Response.json(
       {
-        meals: (typedResults.length ? typedResults : complete).slice(0, 10),
+        meals: typedResults.slice(0, 10),
         query: query || null,
         requestedIngredients,
         ingredientMatches,

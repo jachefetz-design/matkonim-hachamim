@@ -12,23 +12,32 @@ export async function translateText(
   url.searchParams.set("q", clean.slice(0, 490));
   url.searchParams.set("langpair", `${source}|${target}`);
 
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Matkonim-Hachamim/1.0" },
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!response.ok) return clean;
-    const payload = (await response.json()) as {
-      responseData?: { translatedText?: string };
-      responseStatus?: number | string;
-    };
-    const translated = payload.responseData?.translatedText?.trim();
-    return translated && !translated.includes("INVALID SOURCE LANGUAGE")
-      ? translated
-      : clean;
-  } catch {
-    return clean;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Matkonim-Hachamim/1.0" },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) continue;
+      const payload = (await response.json()) as {
+        responseData?: { translatedText?: string };
+        responseStatus?: number | string;
+      };
+      const translated = payload.responseData?.translatedText?.trim();
+      if (translated && !translated.includes("INVALID SOURCE LANGUAGE")) return translated;
+    } catch {
+      // Retry once for transient network and provider failures.
+    }
   }
+  return clean;
+}
+
+export function detectSourceLanguage(text: string): string {
+  if (/[\u0590-\u05ff]/.test(text)) return "he";
+  if (/[\u0400-\u04ff]/.test(text)) return "ru";
+  if (/[\u0600-\u06ff]/.test(text)) return "ar";
+  if (/[\u0370-\u03ff]/.test(text)) return "el";
+  return "en";
 }
 
 export function splitForTranslation(text: string, maxLength = 470): string[] {

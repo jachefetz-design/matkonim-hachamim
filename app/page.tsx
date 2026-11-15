@@ -86,6 +86,32 @@ function scaleMeasure(measure: string, factor: number) {
   const numericPrefix = measure.match(/^[\d\s./¼½¾]+/)?.[0] ?? "";
   return `${prettyNumber(number * factor)}${measure.slice(numericPrefix.length)}`.trim();
 }
+function translateMeasure(measure: string) {
+  return measure
+    .replace(/\bjuice of 1\b/gi, "מיץ מלימון אחד").replace(/\bgrated zest of 1\b/gi, "קליפה מגוררת מלימון אחד")
+    .replace(/\blarge handful\b/gi, "חופן גדול").replace(/\bsmall handful\b/gi, "חופן קטן")
+    .replace(/\bpeeled raw\b/gi, "קלוף ונא").replace(/\bfinely sliced\b/gi, "פרוס דק")
+    .replace(/\bgrated\b/gi, "מגורר").replace(/\bgrating\b/gi, "מעט מגורר")
+    .replace(/\b(tablespoons?|tbsp|tbs)\b/gi, "כפות")
+    .replace(/\b(teaspoons?|tsp)\b/gi, "כפיות")
+    .replace(/\bcups?\b/gi, "כוסות")
+    .replace(/kg\b/gi, "ק״ג").replace(/g\b/gi, "גרם")
+    .replace(/ml\b/gi, "מ״ל").replace(/\bl\b/gi, "ליטר")
+    .replace(/oz\b/gi, "אונקיות").replace(/lb\b/gi, "פאונד")
+    .replace(/\bmedium\b/gi, "בינוניים").replace(/\blarge\b/gi, "גדולים").replace(/\bsmall\b/gi, "קטנים")
+    .replace(/\bchopped\b/gi, "קצוץ").replace(/\bsliced\b/gi, "פרוס").replace(/\bdiced\b/gi, "חתוך לקוביות")
+    .replace(/\bto serve\b/gi, "להגשה").replace(/\bto taste\b/gi, "לפי הטעם")
+    .replace(/\bpinch\b/gi, "קורט").replace(/\bhandful\b/gi, "חופן").replace(/\bpackage\b/gi, "חבילה")
+    .trim();
+}
+function categoryInHebrew(category: string | null) {
+  const categories: Record<string, string> = {
+    Beef: "בשר בקר", Chicken: "עוף", Lamb: "בשר טלה", Seafood: "דגים ופירות ים",
+    Dessert: "קינוח", Starter: "מנה ראשונה", Side: "תוספת", Vegetarian: "צמחוני",
+    Breakfast: "ארוחת בוקר", Pasta: "פסטה", Miscellaneous: "כללי",
+  };
+  return category ? categories[category] || "מתכון" : "מתכון";
+}
 function departmentFor(name: string) {
   if (/chicken|beef|lamb|pork|meat|turkey/i.test(name)) return "בשר ועוף";
   if (/fish|salmon|tuna|cod|shrimp|prawn|seafood/i.test(name)) return "דגים ופירות ים";
@@ -104,13 +130,16 @@ export default function Home() {
   const [form, setForm] = useState<FormState>(defaultForm);
   const [meals, setMeals] = useState<Meal[]>([]);
   const [titles, setTitles] = useState<Record<string, string>>({});
+  const [translatingTitles, setTranslatingTitles] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<Meal | null>(null);
   const [translatedTitle, setTranslatedTitle] = useState("");
   const [translatedInstruction, setTranslatedInstruction] = useState("");
   const [translatedIngredients, setTranslatedIngredients] = useState<string[]>([]);
+  const [translatedMeasures, setTranslatedMeasures] = useState<string[]>([]);
   const [translating, setTranslating] = useState(false);
+  const [translationError, setTranslationError] = useState("");
   const [originalServings, setOriginalServings] = useState(4);
   const [savedCount, setSavedCount] = useState(0);
   const [ingredientDraft, setIngredientDraft] = useState("");
@@ -128,16 +157,16 @@ export default function Home() {
     form.restrictions[key] !== "strict" || restrictionHits(meal, key).length === 0
   ))), [meals, activeRestrictions, form.restrictions]);
 
-  async function translateBatch(texts: string[]) {
+  async function translateBatch(texts: string[], source = "en") {
     const response = await fetch("/api/translate", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts, source: "en", target: "he" }),
+      body: JSON.stringify({ texts, source, target: "he" }),
     });
     if (!response.ok) throw new Error("translation failed");
     return ((await response.json()) as { translated: string[] }).translated;
   }
   async function handleSearch(event: FormEvent) {
-    event.preventDefault(); setLoading(true); setError(""); setSelected(null);
+    event.preventDefault(); setLoading(true); setError(""); setSelected(null); setTranslatingTitles(false);
     try {
       const params = new URLSearchParams({
         type: form.type, query: form.query, language: form.language,
@@ -146,14 +175,14 @@ export default function Home() {
       const response = await fetch(`/api/recipes?${params}`);
       const payload = (await response.json()) as { meals?: Meal[]; error?: string; ingredientMatches?: Record<string, number> };
       if (!response.ok) throw new Error(payload.error || "החיפוש נכשל");
-      const found = payload.meals ?? []; setMeals(found); setIngredientMatches(payload.ingredientMatches ?? {});
+      const found = payload.meals ?? []; setMeals(found); setTitles({}); setIngredientMatches(payload.ingredientMatches ?? {});
       if (!found.length) setError("לא נמצאו מתכונים מתאימים. נסה תיאור קצר יותר או קטגוריה אחרת.");
       if (found.length) {
+        setTranslatingTitles(true);
         try {
-          const translated = await translateBatch([found.map((meal) => meal.strMeal).join(" ||| ")]);
-          const parts = translated[0]?.split(/\s*\|\|\|\s*/);
-          if (parts?.length === found.length) setTitles(Object.fromEntries(found.map((meal, index) => [meal.idMeal, parts[index]])));
-        } catch { setTitles({}); }
+          const translated = await translateBatch(found.map((meal) => meal.strMeal), "auto");
+          if (translated.length === found.length) setTitles(Object.fromEntries(found.map((meal, index) => [meal.idMeal, translated[index]])));
+        } catch { setTitles({}); } finally { setTranslatingTitles(false); }
       }
     } catch (searchError) {
       setMeals([]); setError(searchError instanceof Error ? searchError.message : "אירעה תקלה בחיפוש");
@@ -169,31 +198,47 @@ export default function Home() {
     setForm({ ...form, ingredients: form.ingredients.filter((item) => item !== ingredient) });
   }
   async function chooseMeal(meal: Meal) {
-    setSelected(meal); setTranslatedTitle(titles[meal.idMeal] || meal.strMeal);
-    setTranslatedInstruction(""); setTranslatedIngredients([]); setTranslating(true);
+    setSelected(meal); setTranslatedTitle(""); setTranslationError("");
+    setTranslatedInstruction(""); setTranslatedIngredients([]); setTranslatedMeasures([]);
     setTimeout(() => document.getElementById("recipe-workspace")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    await translateMeal(meal);
+  }
+  async function translateMeal(meal: Meal) {
+    setTranslating(true); setTranslationError("");
     const ingredients = mealIngredients(meal);
     try {
-      const delimiter = " ||| ";
-      const translated = await translateBatch([meal.strMeal, ingredients.map((item) => item.name).join(delimiter), meal.strInstructions]);
+      const translated = await translateBatch([
+        meal.strMeal,
+        ...ingredients.map((item) => item.name),
+        ingredients.map((item) => item.measure || "לפי הצורך").join(" ||| "),
+        meal.strInstructions,
+      ], "auto");
       setTranslatedTitle(translated[0] || meal.strMeal);
-      const translatedNames = translated[1]?.split(/\s*\|\|\|\s*/);
-      setTranslatedIngredients(translatedNames?.length === ingredients.length ? translatedNames : ingredients.map((item) => item.name));
-      setTranslatedInstruction(translated[2] || meal.strInstructions);
+      const translatedNames = translated.slice(1, ingredients.length + 1);
+      const translatedMeasureList = (translated[ingredients.length + 1] || "").split(/\s*\|\|\|\s*/);
+      const instruction = translated[ingredients.length + 2] || "";
+      if (translatedNames.length !== ingredients.length || (!/[\u0590-\u05ff]/.test(instruction) && /[A-Za-z]{4}/.test(meal.strInstructions))) {
+        throw new Error("incomplete translation");
+      }
+      setTranslatedIngredients(translatedNames);
+      setTranslatedMeasures(translatedMeasureList.length === ingredients.length ? translatedMeasureList : ingredients.map((item) => translateMeasure(item.measure)));
+      setTranslatedInstruction(instruction);
     } catch {
-      setTranslatedIngredients(ingredients.map((item) => item.name)); setTranslatedInstruction(meal.strInstructions);
+      setTranslatedTitle(""); setTranslatedIngredients([]); setTranslatedMeasures([]); setTranslatedInstruction("");
+      setTranslationError("התרגום לא הושלם. לא נציג טקסט בשפת המקור — נסה שוב בעוד רגע.");
     } finally { setTranslating(false); }
   }
 
   const factor = form.servings / Math.max(1, originalServings);
-  const ingredientRows: Ingredient[] = selected ? mealIngredients(selected).map((item, index) => ({
+  const ingredientRows: Ingredient[] = selected && !translating && !translationError && translatedIngredients.length ? mealIngredients(selected).map((item, index) => ({
     originalName: item.name, hebrewName: translatedIngredients[index] || item.name, measure: item.measure,
-    scaledMeasure: scaleMeasure(item.measure, factor), department: departmentFor(item.name),
+    scaledMeasure: translateMeasure(scaleMeasure(translatedMeasures[index] || item.measure, factor)), department: departmentFor(item.name),
   })) : [];
-  const steps = selected ? instructionsToSteps(translatedInstruction || selected.strInstructions) : [];
-  const warnings = selected ? activeRestrictions.flatMap((key) => {
+  const steps = selected && !translating && !translationError ? instructionsToSteps(translatedInstruction) : [];
+  const warnings = selected && ingredientRows.length ? activeRestrictions.flatMap((key) => {
     const hits = restrictionHits(selected, key);
-    return hits.length ? [`${restrictionLabels[key].title}: זוהו רכיבים לבדיקה — ${hits.join(", ")}`]
+    const translatedHits = hits.map((hit) => ingredientRows.find((row) => row.originalName === hit)?.hebrewName || hit);
+    return hits.length ? [`${restrictionLabels[key].title}: זוהו רכיבים לבדיקה — ${translatedHits.join(", ")}`]
       : [`${restrictionLabels[key].title}: לא זוהה רכיב ברור ברשימה, אך נדרשת בדיקת תוויות וזיהום משני.`];
   }) : [];
 
@@ -202,14 +247,14 @@ export default function Home() {
     const XLSX = await import("xlsx");
     const workbook = XLSX.utils.book_new();
     const details = XLSX.utils.aoa_to_sheet([
-      ["מתכונים חכמים — סיכום"], ["שם בעברית", translatedTitle], ["שם במקור", selected.strMeal],
-      ["קטגוריה", selected.strCategory || ""], ["מטבח", selected.strArea || selected.strCountry || ""],
+      ["מתכונים חכמים — סיכום"], ["שם המתכון", translatedTitle],
+      ["קטגוריה", categoryInHebrew(selected.strCategory)],
       ["מספר סועדים", form.servings], ["מנות במתכון המקורי (לפי הזנת המשתמש)", originalServings],
       ["מוצרים שסומנו כזמינים", form.ingredients.join(", ")],
       ["מקור", selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`],
     ]);
     const ingredientsSheet = XLSX.utils.json_to_sheet(ingredientRows.map((row) => ({
-      "מחלקה": row.department, "מוצר בעברית": row.hebrewName, "שם במקור": row.originalName,
+      "מחלקה": row.department, "מוצר": row.hebrewName,
       "כמות מקורית": row.measure, "כמות מותאמת": row.scaledMeasure,
     })));
     const shoppingSheet = XLSX.utils.json_to_sheet(ingredientRows.map((row) => ({
@@ -266,18 +311,19 @@ export default function Home() {
       <section className="results-section no-print" aria-live="polite">
         {error && <div className="error-banner"><AlertTriangle size={20} />{error}</div>}
         {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">תוצאות מהעולם</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>הכותרות תורגמו אוטומטית. תמיד בדוק את המקור.</p></div>}
-        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>{meal.strArea || meal.strCountry || "מטבח עולמי"}</span></div><div className="recipe-card-body"><p className="source-title">{meal.strMeal}</p><h3>{titles[meal.idMeal] || meal.strMeal}</h3><div className="meta-row"><span><BookOpen size={14} />{meal.strCategory || "מתכון"}</span><span><Clock3 size={14} />זמן לא צוין</span></div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? `נדרשת בדיקה: ${hits.slice(0, 2).join(", ")}` : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
+        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>מטבח עולמי</span></div><div className="recipe-card-body"><h3>{titles[meal.idMeal] || (translatingTitles ? "מתרגם את שם המתכון..." : "מתכון מהמאגר")}</h3><div className="meta-row"><span><BookOpen size={14} />{categoryInHebrew(meal.strCategory)}</span><span><Clock3 size={14} />זמן לא צוין</span></div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? "נמצאו רכיבים המחייבים בדיקה" : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
         {meals.length > 0 && visibleMeals.length === 0 && <div className="empty-state"><Fish size={32} /><h3>כל התוצאות סוננו בגלל רגישות מחמירה</h3><p>נסה חיפוש אחר או שנה רגישות ל״העדפה״ כדי לראות מתכונים עם אזהרות.</p></div>}
       </section>
 
       {selected && <section id="recipe-workspace" className="recipe-workspace">
-        <div className="report-hero"><img src={selected.strMealThumb} alt="" /><div><span className="eyebrow">המתכון שבחרת</span><p className="source-title">{selected.strMeal}</p><h2>{translatedTitle || selected.strMeal}</h2><div className="meta-row"><span><BookOpen size={15} />{selected.strCategory}</span><span><UtensilsCrossed size={15} />ל־{form.servings} סועדים</span></div></div></div>
+        <div className="report-hero"><img src={selected.strMealThumb} alt="" /><div><span className="eyebrow">המתכון שבחרת</span><h2>{translatedTitle || "מתרגם את שם המתכון..."}</h2><div className="meta-row"><span><BookOpen size={15} />מתכון מתורגם לעברית</span><span><UtensilsCrossed size={15} />ל־{form.servings} סועדים</span></div></div></div>
         {translating && <div className="translation-status no-print"><LoaderCircle className="spin" size={18} />מתרגם את המתכון לעברית...</div>}
+        {translationError && <div className="translation-error no-print"><AlertTriangle size={20} /><div><b>התרגום טרם הושלם</b><p>{translationError}</p></div><button type="button" onClick={() => translateMeal(selected)}>נסה לתרגם שוב</button></div>}
         <div className="adjust-bar no-print"><div><b>התאמת כמויות</b><small>מאגר המקור אינו מציין מספר מנות. הזן את מספר המנות המקורי לפי שיקול דעתך.</small></div><label>מנות במקור <input type="number" min="1" max="30" value={originalServings} onChange={(event) => setOriginalServings(Math.max(1, Number(event.target.value)))} /></label><span className="factor-pill">מקדם ×{prettyNumber(factor)}</span></div>
         {warnings.length > 0 && <div className="warning-box"><AlertTriangle size={21} /><div><b>בדיקות בטיחות</b>{warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>}
-        <div className="report-columns"><section className="ingredients-panel"><div className="panel-title"><ShoppingBasket size={20} /><h3>מצרכים ורשימת קניות</h3></div>{Object.entries(groupedIngredients).map(([department, rows]) => <div className="department" key={department}><h4>{department}</h4>{rows.map((row, index) => <label className="ingredient-row" key={`${row.originalName}-${index}`}><input type="checkbox" /><span><b>{row.hebrewName}</b><small>{row.originalName}</small></span><em>{row.scaledMeasure || "לפי הצורך"}</em></label>)}</div>)}</section><section className="steps-panel"><div className="panel-title"><UtensilsCrossed size={20} /><h3>אופן ההכנה</h3></div>{steps.map((step, index) => <div className="step" key={`${index}-${step.slice(0, 20)}`}><span>{index + 1}</span><p>{step}</p></div>)}</section></div>
+        {!translating && !translationError && <div className="report-columns"><section className="ingredients-panel"><div className="panel-title"><ShoppingBasket size={20} /><h3>מצרכים ורשימת קניות</h3></div>{Object.entries(groupedIngredients).map(([department, rows]) => <div className="department" key={department}><h4>{department}</h4>{rows.map((row, index) => <label className="ingredient-row" key={`${row.originalName}-${index}`}><input type="checkbox" /><span><b>{row.hebrewName}</b></span><em>{row.scaledMeasure || "לפי הצורך"}</em></label>)}</div>)}</section><section className="steps-panel"><div className="panel-title"><UtensilsCrossed size={20} /><h3>אופן ההכנה</h3></div>{steps.map((step, index) => <div className="step" key={`${index}-${step.slice(0, 20)}`}><span>{index + 1}</span><p>{step}</p></div>)}</section></div>}
         <div className="source-box"><b>מקור ושקיפות</b><p>המתכון הגיע מ־TheMealDB ותורגם אוטומטית. הכמויות הותאמו מתמטית; באפייה, זמני הכנה וגודל תבנית עשויים לדרוש התאמה ידנית.</p><a href={selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`} target="_blank" rel="noreferrer">פתח את המקור <ExternalLink size={14} /></a></div>
-        <div className="action-bar no-print"><button className="secondary-button" onClick={saveRecipe}><Heart size={18} />שמור במאגר שלי</button><button className="secondary-button" onClick={() => window.print()}><Printer size={18} />דוח PDF / הדפסה</button><button className="excel-button" onClick={exportExcel}><FileSpreadsheet size={18} />הורד Excel</button></div>
+        {!translating && !translationError && <div className="action-bar no-print"><button className="secondary-button" onClick={saveRecipe}><Heart size={18} />שמור במאגר שלי</button><button className="secondary-button" onClick={() => window.print()}><Printer size={18} />דוח PDF / הדפסה</button><button className="excel-button" onClick={exportExcel}><FileSpreadsheet size={18} />הורד Excel</button></div>}
       </section>}
       <footer className="no-print"><span><Sparkles size={15} /> מתכונים חכמים</span><p>המידע מיועד לתכנון קולינרי. במקרה של אלרגיה יש לבדוק תוויות, סביבת ייצור וזיהום משני.</p><a href="https://www.themealdb.com/api.php" target="_blank" rel="noreferrer">Recipe data by TheMealDB</a></footer>
     </main>
