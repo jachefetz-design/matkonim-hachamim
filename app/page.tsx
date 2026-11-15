@@ -176,7 +176,9 @@ export default function Home() {
       const payload = (await response.json()) as { meals?: Meal[]; error?: string; ingredientMatches?: Record<string, number> };
       if (!response.ok) throw new Error(payload.error || "החיפוש נכשל");
       const found = payload.meals ?? []; setMeals(found); setTitles({}); setIngredientMatches(payload.ingredientMatches ?? {});
-      if (!found.length) setError("לא נמצאו מתכונים מתאימים. נסה תיאור קצר יותר או קטגוריה אחרת.");
+      if (!found.length) setError(form.query.trim()
+        ? `לא נמצאו מתכונים שבהם “${form.query.trim()}” מופיע בשם המתכון או ברשימת המצרכים. נסה מילה מדויקת אחרת.`
+        : "לא נמצאו מתכונים מתאימים. נסה קטגוריה אחרת.");
       if (found.length) {
         setTranslatingTitles(true);
         try {

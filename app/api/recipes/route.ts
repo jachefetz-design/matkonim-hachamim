@@ -15,6 +15,32 @@ const typeSearch: Record<string, { categories?: string[]; terms?: string[] }> = 
 
 type Meal = Record<string, string | null> & { idMeal: string; strMeal: string };
 
+const queryStopWords = new Set([
+  "a", "an", "and", "the", "with", "without", "in", "on", "for", "of", "to",
+  "recipe", "dish", "meal", "oven", "baked", "bake", "sweet", "savory", "savoury",
+  "cake", "cakes", "pie", "pies", "tart", "tarts", "quiche", "pastry",
+]);
+
+function normalizeSearchText(value: string) {
+  return value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function requiredQueryTerms(query: string) {
+  return [...new Set(normalizeSearchText(query).split(" ")
+    .filter((term) => term.length > 1 && !queryStopWords.has(term)))];
+}
+
+function mealMatchesRequiredTerms(meal: Meal, terms: string[]) {
+  if (!terms.length) return true;
+  const ingredients = Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "").join(" ");
+  const searchable = ` ${normalizeSearchText(`${meal.strMeal} ${ingredients}`)} `;
+  return terms.every((term) => {
+    const singular = term.length > 3 && term.endsWith("s") ? term.slice(0, -1) : term;
+    return searchable.includes(` ${term} `) || searchable.includes(` ${singular} `);
+  });
+}
+
 function matchesRequestedType(meal: Meal, type: string) {
   const title = meal.strMeal.toLowerCase();
   const category = (meal.strCategory ?? "").toLowerCase();
@@ -91,12 +117,17 @@ export async function GET(request: Request) {
         candidateScores.set(meal.idMeal, (candidateScores.get(meal.idMeal) ?? 0) + 2);
       }
 
-      if (!summaries.size) {
-        const ingredient = query.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-        const byIngredient = await getJson(`${API}/filter.php?i=${encodeURIComponent(ingredient)}`);
-        for (const meal of byIngredient.meals ?? []) {
+      // The free-text request is a strict requirement, not merely a ranking hint.
+      // Search every meaningful request word as an ingredient as well, so recipes
+      // where it appears only in the ingredient list are still considered.
+      const strictTerms = requiredQueryTerms(query);
+      const termResults = await Promise.all(strictTerms.map((term) =>
+        getJson(`${API}/filter.php?i=${encodeURIComponent(term)}`).catch(() => ({ meals: [] })),
+      ));
+      for (const result of termResults) {
+        for (const meal of result.meals ?? []) {
           summaries.set(meal.idMeal, meal);
-          candidateScores.set(meal.idMeal, (candidateScores.get(meal.idMeal) ?? 0) + 1);
+          candidateScores.set(meal.idMeal, (candidateScores.get(meal.idMeal) ?? 0) + 4);
         }
       }
     }
@@ -154,7 +185,7 @@ export async function GET(request: Request) {
 
     const chosen = [...summaries.values()]
       .sort((a, b) => (candidateScores.get(b.idMeal) ?? 0) - (candidateScores.get(a.idMeal) ?? 0))
-      .slice(0, 14);
+      .slice(0, query ? 24 : 14);
     const details = await Promise.all(
       chosen.map((meal) =>
         meal.strInstructions ? Promise.resolve(meal) : lookup(meal.idMeal),
@@ -173,12 +204,16 @@ export async function GET(request: Request) {
       }).length;
     }
     complete.sort((a, b) => (ingredientMatches[b.idMeal] ?? 0) - (ingredientMatches[a.idMeal] ?? 0));
-    const typedResults = complete.filter((meal) => matchesRequestedType(meal, type));
+    const strictQueryTerms = query ? requiredQueryTerms(query) : [];
+    const typedResults = complete.filter((meal) =>
+      matchesRequestedType(meal, type) && mealMatchesRequiredTerms(meal, strictQueryTerms),
+    );
 
     return Response.json(
       {
         meals: typedResults.slice(0, 10),
         query: query || null,
+        requiredQueryTerms: strictQueryTerms,
         requestedIngredients,
         ingredientMatches,
         provider: "TheMealDB",
