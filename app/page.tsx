@@ -173,7 +173,7 @@ export default function Home() {
     event.preventDefault(); setLoading(true); setError(""); setSelected(null); setTranslatingTitles(false);
     try {
       const params = new URLSearchParams({
-        v: "4",
+        v: "6",
         type: form.type, query: form.query, language: form.language,
         ingredients: form.ingredients.join("|"),
         restrictions: Object.entries(form.restrictions).filter(([, mode]) => mode !== "off").map(([key, mode]) => `${key}:${mode}`).join("|"),
@@ -223,21 +223,32 @@ export default function Home() {
       return;
     }
     try {
+      const ingredientBlock = ingredients.map((item, index) =>
+        `[${index + 1}] ${item.name} ||| ${item.measure || "as needed"}`,
+      ).join("\n");
       const translated = await translateBatch([
         meal.strMeal,
-        ...ingredients.map((item) => item.name),
-        ingredients.map((item) => item.measure || "לפי הצורך").join(" ||| "),
+        ingredientBlock,
         meal.strInstructions,
       ], "auto");
       setTranslatedTitle(translated[0] || meal.strMeal);
-      const translatedNames = translated.slice(1, ingredients.length + 1);
-      const translatedMeasureList = (translated[ingredients.length + 1] || "").split(/\s*\|\|\|\s*/);
-      const instruction = translated[ingredients.length + 2] || "";
-      if (translatedNames.length !== ingredients.length || (!/[\u0590-\u05ff]/.test(instruction) && /[A-Za-z]{4}/.test(meal.strInstructions))) {
+      const translatedPairs = new Map<number, { name: string; measure: string }>();
+      const translatedIngredientBlock = translated[1] || "";
+      for (const match of translatedIngredientBlock.matchAll(/\[(\d+)]\s*([\s\S]*?)\s*\|\|\|\s*([\s\S]*?)(?=\s*\[\d+]|\s*$)/g)) {
+        translatedPairs.set(Number(match[1]), { name: match[2].trim(), measure: match[3].trim() });
+      }
+      const translatedNames = ingredients.map((_, index) => translatedPairs.get(index + 1)?.name || "");
+      const translatedMeasureList = ingredients.map((_, index) => translatedPairs.get(index + 1)?.measure || "");
+      const instruction = translated[2] || "";
+      const everyIngredientTranslated = translatedNames.every((name, index) =>
+        name && (!/[A-Za-z]{3}/.test(ingredients[index].name) || /[\u0590-\u05ff]/.test(name)),
+      );
+      const measuresComplete = translatedMeasureList.every(Boolean);
+      if (!everyIngredientTranslated || !measuresComplete || (!/[\u0590-\u05ff]/.test(instruction) && /[A-Za-z]{4}/.test(meal.strInstructions))) {
         throw new Error("incomplete translation");
       }
       setTranslatedIngredients(translatedNames);
-      setTranslatedMeasures(translatedMeasureList.length === ingredients.length ? translatedMeasureList : ingredients.map((item) => translateMeasure(item.measure)));
+      setTranslatedMeasures(translatedMeasureList);
       setTranslatedInstruction(instruction);
     } catch {
       setTranslatedTitle(""); setTranslatedIngredients([]); setTranslatedMeasures([]); setTranslatedInstruction("");
@@ -347,10 +358,10 @@ export default function Home() {
         <div className="adjust-bar no-print"><div><b>התאמת כמויות</b><small>מאגר המקור אינו מציין מספר מנות. הזן את מספר המנות המקורי לפי שיקול דעתך.</small></div><label>מנות במקור <input type="number" min="1" max="30" value={originalServings} onChange={(event) => setOriginalServings(Math.max(1, Number(event.target.value)))} /></label><span className="factor-pill">מקדם ×{prettyNumber(factor)}</span></div>
         {warnings.length > 0 && <div className="warning-box"><AlertTriangle size={21} /><div><b>בדיקות בטיחות</b>{warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>}
         {!translating && !translationError && <div className="report-columns"><section className="ingredients-panel"><div className="panel-title"><ShoppingBasket size={20} /><h3>מצרכים ורשימת קניות</h3></div>{Object.entries(groupedIngredients).map(([department, rows]) => <div className="department" key={department}><h4>{department}</h4>{rows.map((row, index) => <label className="ingredient-row" key={`${row.originalName}-${index}`}><input type="checkbox" /><span><b>{row.hebrewName}</b></span><em>{row.scaledMeasure || "לפי הצורך"}</em></label>)}</div>)}</section><section className="steps-panel"><div className="panel-title"><UtensilsCrossed size={20} /><h3>אופן ההכנה</h3></div>{steps.map((step, index) => <div className="step" key={`${index}-${step.slice(0, 20)}`}><span>{index + 1}</span><p>{step}</p></div>)}</section></div>}
-        <div className="source-box"><b>מקור ושקיפות</b><p>{selected.strProvider === "השולחן" ? `המתכון התקבל מאתר “השולחן” ומוצג בעברית כפי שפורסם. מספר הדירוגים במועד החיפוש: ${selected.ratingCount || "0"}.` : "המתכון הגיע מ־TheMealDB ותורגם אוטומטית."} הכמויות הותאמו מתמטית; באפייה, זמני הכנה וגודל תבנית עשויים לדרוש התאמה ידנית.</p><a href={selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`} target="_blank" rel="noreferrer">פתח את המקור <ExternalLink size={14} /></a></div>
+        <div className="source-box"><b>מקור ושקיפות</b><p>{selected.strProvider === "השולחן" ? `המתכון התקבל מאתר “השולחן” ומוצג בעברית כפי שפורסם. מספר הדירוגים במועד החיפוש: ${selected.ratingCount || "0"}.` : selected.strProvider === "Coeliac UK" ? "המתכון התקבל ממאגר המתכונים הייעודי ללא גלוטן של Coeliac UK ותורגם במלואו לעברית." : "המתכון הגיע מ־TheMealDB ותורגם במלואו לעברית."} הכמויות הותאמו מתמטית; באפייה, זמני הכנה וגודל תבנית עשויים לדרוש התאמה ידנית.</p><a href={selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`} target="_blank" rel="noreferrer">פתח את המקור <ExternalLink size={14} /></a></div>
         {!translating && !translationError && <div className="action-bar no-print"><button className="secondary-button" onClick={saveRecipe}><Heart size={18} />שמור במאגר שלי</button><button className="secondary-button" onClick={() => window.print()}><Printer size={18} />דוח PDF / הדפסה</button><button className="excel-button" onClick={exportExcel}><FileSpreadsheet size={18} />הורד Excel</button></div>}
       </section>}
-      <footer className="no-print"><span><Sparkles size={15} /> מתכונים חכמים</span><p>המידע מיועד לתכנון קולינרי. במקרה של אלרגיה יש לבדוק תוויות, סביבת ייצור וזיהום משני.</p><a href="https://www.hashulchan.co.il/מתכונים/" target="_blank" rel="noreferrer">מקור מתכונים: השולחן</a></footer>
+      <footer className="no-print"><span><Sparkles size={15} /> מתכונים חכמים</span><p>המידע מיועד לתכנון קולינרי. במקרה של אלרגיה יש לבדוק תוויות, סביבת ייצור וזיהום משני.</p><a href="https://www.hashulchan.co.il/מתכונים/" target="_blank" rel="noreferrer">מקור: השולחן</a><a href="https://www.coeliac.org.uk/recipes/" target="_blank" rel="noreferrer">מקור ללא גלוטן: Coeliac UK</a></footer>
     </main>
   );
 }

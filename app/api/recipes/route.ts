@@ -4,6 +4,7 @@ export const runtime = "edge";
 
 const API = "https://www.themealdb.com/api/json/v1/1";
 const HASHULCHAN = "https://www.hashulchan.co.il";
+const COELIAC_UK = "https://www.coeliac.org.uk";
 const typeSearch: Record<string, { categories?: string[]; terms?: string[] }> = {
   cakes: { terms: ["cake"] },
   meat: { categories: ["Beef", "Chicken", "Lamb"] },
@@ -94,7 +95,69 @@ function matchesRequestedType(meal: Meal, type: string) {
 }
 
 function decodeHtml(value: string) {
-  return value.replace(/&amp;/g, "&").replace(/&#038;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  return value.replace(/&amp;/g, "&").replace(/&#038;/g, "&").replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&#8217;/g, "’").replace(/&nbsp;/g, " ");
+}
+
+function splitEnglishIngredient(value: string) {
+  const clean = decodeHtml(value).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const match = clean.match(/^((?:\d+(?:[.,/]\d+)?|[¼½¾⅓⅔])(?:\s+\d+\/\d+)?\s*(?:kg|g|mg|ml|l|cups?|tbsp|tsp|tablespoons?|teaspoons?|oz|lb|pounds?)?)\s+(.+)$/i);
+  return match ? { measure: match[1].trim(), name: match[2].trim() } : { measure: "", name: clean };
+}
+
+function parseCoeliacRecipe(html: string, url: string): Meal | null {
+  for (const match of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const recipe = recipeObject(JSON.parse(match[1]));
+      if (!recipe || typeof recipe.name !== "string" || !Array.isArray(recipe.recipeIngredient)) continue;
+      const instructions = Array.isArray(recipe.recipeInstructions)
+        ? recipe.recipeInstructions.map((step) => typeof step === "string" ? step : String((step as Record<string, unknown>)?.text ?? "")).filter(Boolean)
+        : [];
+      if (!instructions.length) continue;
+      const image = Array.isArray(recipe.image) ? String(recipe.image[0] ?? "") : String(recipe.image ?? "");
+      const meal: Meal = {
+        idMeal: `coeliac-${hashId(url).replace("hash-", "")}`,
+        strMeal: decodeHtml(recipe.name), strMealThumb: image,
+        strInstructions: instructions.join("\n"), strCategory: String(recipe.recipeCategory ?? "Gluten-free"),
+        strArea: "United Kingdom", strTags: "gluten-free,coeliac",
+        strSource: url, strProvider: "Coeliac UK", strLanguage: "en",
+        ratingCount: "0", ratingValue: "", strGlutenFreeSource: "true",
+      };
+      recipe.recipeIngredient.map(String).slice(0, 20).forEach((ingredient, index) => {
+        const parsed = splitEnglishIngredient(ingredient);
+        meal[`strIngredient${index + 1}`] = parsed.name;
+        meal[`strMeasure${index + 1}`] = parsed.measure;
+      });
+      return meal;
+    } catch { /* Continue to the next structured-data block. */ }
+  }
+  return null;
+}
+
+async function searchCoeliacUk(query: string) {
+  if (!query) return [] as Meal[];
+  const headers = { "User-Agent": "Matkonim-Hachamim/1.0 Googlebot", "Accept-Language": "en-GB,en;q=0.9" };
+  try {
+    const searchTerm = query.trim().replace(/s$/i, "");
+    const search = await fetch(`${COELIAC_UK}/recipes/?search=${encodeURIComponent(searchTerm)}`, {
+      headers, signal: AbortSignal.timeout(18_000),
+    });
+    if (!search.ok) return [] as Meal[];
+    const html = await search.text();
+    const urls = [...new Set([...html.matchAll(/href=["'](https:\/\/www\.coeliac\.org\.uk\/recipe\/[^"']+)["']/gi)]
+      .map((match) => decodeHtml(match[1])))].slice(0, 24);
+    const meals: Meal[] = [];
+    for (let start = 0; start < urls.length; start += 6) {
+      const batch = await Promise.all(urls.slice(start, start + 6).map(async (url) => {
+        try {
+          const page = await fetch(url, { headers, signal: AbortSignal.timeout(18_000) });
+          return page.ok ? parseCoeliacRecipe(await page.text(), url) : null;
+        } catch { return null; }
+      }));
+      meals.push(...batch.filter((meal): meal is Meal => Boolean(meal)));
+    }
+    return meals;
+  } catch { return [] as Meal[]; }
 }
 
 function recipeObject(value: unknown): Record<string, unknown> | null {
@@ -229,6 +292,9 @@ export async function GET(request: Request) {
     }
 
     const hashulchanPromise = rawQuery ? searchHashulchan(rawQuery).catch(() => [] as Meal[]) : Promise.resolve([] as Meal[]);
+    const coeliacPromise = mandatoryRestrictions.includes("gluten") && query
+      ? searchCoeliacUk(query).catch(() => [] as Meal[])
+      : Promise.resolve([] as Meal[]);
     const summaries = new Map<string, Meal>();
     const candidateScores = new Map<string, number>();
 
@@ -334,6 +400,9 @@ export async function GET(request: Request) {
     const hashulchanResults = (await hashulchanPromise).filter((meal) =>
       matchesRequestedType(meal, type) && mealMatchesRequiredTerms(meal, sourceTerms),
     );
+    const coeliacResults = (await coeliacPromise).filter((meal) =>
+      matchesRequestedType(meal, type) && mealMatchesRequiredTerms(meal, strictQueryTerms),
+    );
     for (const meal of hashulchanResults) {
       const names = Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "").join(" ");
       ingredientMatches[meal.idMeal] = rawIngredients.filter((ingredient) =>
@@ -344,13 +413,16 @@ export async function GET(request: Request) {
       const names = Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "");
       if (key === "gluten") return names.some((name) => {
         if (/gluten[- ]?free flour|almond flour|coconut flour|rice flour|corn flour|cornstarch|tamari|קמח ללא גלוטן|קמח שקדים|קמח קוקוס|קמח אורז|קמח תירס|קורנפלור|טמארי/i.test(name)) return false;
-        return /flour|wheat|bread|breadcrumbs|pasta|spaghetti|noodle|couscous|barley|semolina|soy sauce|tortilla|cracker|pastry|קמח|חיטה|לחם|פירורי לחם|פסטה|אטריות|קוסקוס|שעורה|סולת|רוטב סויה|טורטייה/i.test(name);
+        return /flour|wheat|bread|breadcrumbs|pasta|spaghetti|noodle|couscous|barley|semolina|soy sauce|tortilla|cracker|pastry|phyllo|filo|puff pastry|קמח|חיטה|לחם|פירורי לחם|פסטה|אטריות|קוסקוס|שעורה|סולת|רוטב סויה|טורטייה|פילו|בצק עלים/i.test(name);
       });
       if (key === "dairy") return names.some((name) => /milk|cheese|butter|cream|yogurt|whey|mascarpone|mozzarella|parmesan|cheddar|feta|ricotta|חלב|גבינ|חמאה|שמנת|יוגורט|מסקרפונה|מוצרלה|פרמזן|פטה|ריקוטה/i.test(name));
       return names.some((name) => /sugar|honey|syrup|flour|bread|rice|potato|pasta|noodle|couscous|corn|beans|lentil|oats|barley|chocolate|סוכר|דבש|סירופ|קמח|לחם|אורז|תפוח אדמה|פסטה|אטריות|קוסקוס|תירס|שעועית|עדשים|שיבולת שועל|שעורה|שוקולד/i.test(name));
     };
-    const combinedSource = (hashulchanResults.length ? hashulchanResults : typedResults)
-      .filter((meal) => mandatoryRestrictions.every((key) => !violatesRestriction(meal, key)));
+    const glutenExplicit = (meal: Meal) => meal.strGlutenFreeSource === "true" || /ללא גלוטן|gluten[- ]?free|coeliac/i.test(`${meal.strTags ?? ""} ${meal.strMeal}`);
+    const regularSource = hashulchanResults.length ? hashulchanResults : typedResults;
+    const combinedSource = [...coeliacResults, ...regularSource]
+      .filter((meal) => mandatoryRestrictions.every((key) => !violatesRestriction(meal, key)))
+      .filter((meal) => !mandatoryRestrictions.includes("gluten") || glutenExplicit(meal));
     const combined = [...combinedSource]
       .filter((meal, index, list) => list.findIndex((candidate) => normalizeSearchText(candidate.strMeal) === normalizeSearchText(meal.strMeal)) === index)
       .sort((a, b) => {
@@ -358,7 +430,8 @@ export async function GET(request: Request) {
         if (byRatings) return byRatings;
         const byIngredients = (ingredientMatches[b.idMeal] ?? 0) - (ingredientMatches[a.idMeal] ?? 0);
         if (byIngredients) return byIngredients;
-        return (b.strProvider === "השולחן" ? 1 : 0) - (a.strProvider === "השולחן" ? 1 : 0);
+        const sourcePriority = (meal: Meal) => meal.strGlutenFreeSource === "true" ? 2 : meal.strProvider === "השולחן" ? 1 : 0;
+        return sourcePriority(b) - sourcePriority(a);
       });
 
     return Response.json(
@@ -368,8 +441,8 @@ export async function GET(request: Request) {
         requiredQueryTerms: strictQueryTerms,
         requestedIngredients,
         ingredientMatches,
-        provider: "השולחן + TheMealDB",
-        sourceCounts: { hashulchan: hashulchanResults.length, themealdb: typedResults.length },
+        provider: "השולחן + Coeliac UK + TheMealDB",
+        sourceCounts: { hashulchan: hashulchanResults.length, coeliacUk: coeliacResults.length, themealdb: typedResults.length },
       },
       { headers: { "Cache-Control": "no-store" } },
     );
