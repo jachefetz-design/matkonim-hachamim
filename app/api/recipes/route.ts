@@ -3,6 +3,7 @@ import { translateText } from "@/lib/recipe-server";
 export const runtime = "edge";
 
 const API = "https://www.themealdb.com/api/json/v1/1";
+const HASHULCHAN = "https://www.hashulchan.co.il";
 const typeSearch: Record<string, { categories?: string[]; terms?: string[] }> = {
   cakes: { terms: ["cake"] },
   meat: { categories: ["Beef", "Chicken", "Lamb"] },
@@ -20,15 +21,24 @@ const queryStopWords = new Set([
   "recipe", "dish", "meal", "oven", "baked", "bake", "sweet", "savory", "savoury",
   "cake", "cakes", "pie", "pies", "tart", "tarts", "quiche", "pastry",
 ]);
+const sourceStopWords = new Set([
+  "של", "עם", "בלי", "ללא", "מתכון", "מתכונים", "בתנור", "אפוי", "אפויה", "מתוק", "מתוקה", "מלוח", "מלוחה",
+  "עוגה", "עוגת", "עוגות", "מאפה", "מאפים", "פאי", "טארט", "קיש", "פשטידה", "פשטידת",
+]);
 
 function normalizeSearchText(value: string) {
   return value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+    .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
 function requiredQueryTerms(query: string) {
   return [...new Set(normalizeSearchText(query).split(" ")
     .filter((term) => term.length > 1 && !queryStopWords.has(term)))];
+}
+
+function requiredSourceTerms(query: string) {
+  return [...new Set(normalizeSearchText(query).split(" ")
+    .filter((term) => term.length > 1 && !sourceStopWords.has(term)))];
 }
 
 function mealMatchesRequiredTerms(meal: Meal, terms: string[]) {
@@ -49,22 +59,115 @@ function matchesRequestedType(meal: Meal, type: string) {
     .join(" ")
     .toLowerCase();
   const all = `${title} ${category} ${tags} ${ingredients}`;
-  const sweetSignals = /\b(dessert|sweet|cake|chocolate|cocoa|custard|jam|caramel|apple|berry|strawberry|blueberry|raspberry|cherry|banana|lemon curd|treacle)\b/i;
-  const savorySignals = /\b(beef|chicken|lamb|pork|fish|salmon|tuna|cheese|onion|garlic|spinach|mushroom|tomato|potato|leek|broccoli|zucchini|courgette)\b/i;
+  const sweetSignals = /dessert|sweet|cake|chocolate|cocoa|custard|jam|caramel|apple|berry|strawberry|blueberry|raspberry|cherry|banana|lemon curd|treacle|קינוח|מתוק|עוג|שוקולד|קקאו|ריבה|קרמל|תפוח|תות|דובדבן|בננה/i;
+  const savorySignals = /beef|chicken|lamb|pork|fish|salmon|tuna|cheese|onion|garlic|spinach|mushroom|tomato|potato|leek|broccoli|zucchini|courgette|בשר|עוף|טלה|דג|סלמון|טונה|גבינ|בצל|שום|תרד|פטריות|עגבני|תפוח אדמה|כרישה|ברוקולי|קישוא/i;
   const isSweet = category === "dessert" || sweetSignals.test(`${title} ${category} ${tags}`);
 
-  if (type === "cakes") return /\bcakes?\b/i.test(title);
+  if (type === "cakes") return /cakes?|עוגה|עוגת|עוגות|קייק/i.test(title);
   if (type === "sweet_bake") return isSweet;
   if (type === "savory_bake") {
-    return !isSweet && (/\b(pie|tart|pastry|roll)\b/i.test(title) || savorySignals.test(all));
+    return !isSweet && (/pie|tart|pastry|roll|מאפה|פשטידה|קיש|בורקס|טארט|פאי/i.test(title) || savorySignals.test(all));
   }
   if (type === "quiche_savory") {
-    return !isSweet && (/\b(quiche|pie|tart)\b/i.test(title) || savorySignals.test(all));
+    return !isSweet && (/quiche|pie|tart|קיש|פשטידה|טארט|פאי/i.test(title) || savorySignals.test(all));
   }
   if (type === "pie_sweet") {
-    return isSweet && /\b(pie|tart|pudding)\b/i.test(title);
+    return isSweet && /pie|tart|pudding|פאי|טארט|פשטידה/i.test(title);
   }
+  if (type === "meat") return /beef|chicken|lamb|pork|meat|בשר|בקר|עוף|טלה|פרגית/i.test(all);
+  if (type === "fish") return /fish|salmon|tuna|cod|seafood|דג|סלמון|טונה|בקלה/i.test(all);
   return true;
+}
+
+function decodeHtml(value: string) {
+  return value.replace(/&amp;/g, "&").replace(/&#038;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+
+function recipeObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  if (object["@type"] === "Recipe") return object;
+  if (Array.isArray(object["@graph"])) {
+    return object["@graph"].map(recipeObject).find(Boolean) ?? null;
+  }
+  return null;
+}
+
+function hashId(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  return `hash-${Math.abs(hash)}`;
+}
+
+function splitHebrewIngredient(value: string) {
+  const match = value.trim().match(/^([\d\s./¼½¾⅓⅔]+(?:גרם|ק״ג|ק"ג|קג|מ״ל|מ"ל|ליטר|כוסות?|כפות?|כפיות?|יחידות?|גביע(?:ים)?|חבילות?)?(?:\s*\([^)]*\))?)\s+(.+)$/i);
+  return match ? { measure: match[1].trim(), name: match[2].trim() } : { measure: "", name: value.trim() };
+}
+
+function parseHashulchanRecipe(html: string, url: string): Meal | null {
+  for (const match of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const recipe = recipeObject(JSON.parse(match[1]));
+      if (!recipe || typeof recipe.name !== "string") continue;
+      const ingredients = Array.isArray(recipe.recipeIngredient) ? recipe.recipeIngredient.map(String) : [];
+      const instructions = Array.isArray(recipe.recipeInstructions)
+        ? recipe.recipeInstructions.map((step) => typeof step === "string" ? step : String((step as Record<string, unknown>)?.text ?? "")).filter(Boolean)
+        : [];
+      const image = Array.isArray(recipe.image) ? String(recipe.image[0] ?? "") : String(recipe.image ?? "");
+      const rating = recipe.aggregateRating && typeof recipe.aggregateRating === "object"
+        ? recipe.aggregateRating as Record<string, unknown> : {};
+      const meal: Meal = {
+        idMeal: hashId(url), strMeal: recipe.name, strMealThumb: image,
+        strInstructions: instructions.join("\n"), strCategory: "השולחן", strArea: "ישראל",
+        strTags: String(recipe.keywords ?? ""), strSource: url, strProvider: "השולחן",
+        strLanguage: "he", ratingCount: String(rating.ratingCount ?? "0"), ratingValue: String(rating.ratingValue ?? ""),
+      };
+      ingredients.slice(0, 20).forEach((ingredient, index) => {
+        const parsed = splitHebrewIngredient(ingredient);
+        meal[`strIngredient${index + 1}`] = parsed.name;
+        meal[`strMeasure${index + 1}`] = parsed.measure;
+      });
+      return meal;
+    } catch { /* Ignore malformed metadata blocks and continue. */ }
+  }
+  return null;
+}
+
+async function searchHashulchan(query: string) {
+  if (!query) return [] as Meal[];
+  const headers = { "User-Agent": "Matkonim-Hachamim/1.0 Googlebot", "Accept-Language": "he-IL,he;q=0.9" };
+  const pageUrls = [
+    `${HASHULCHAN}/search/?q=${encodeURIComponent(query)}`,
+    ...Array.from({ length: 9 }, (_, index) =>
+      `${HASHULCHAN}/wp-content/themes/rgb/ajax/search_load_content.php?q=${encodeURIComponent(query)}&p=${11 + index * 10}&ajax=true`,
+    ),
+  ];
+  const searchPages = await Promise.all(pageUrls.map(async (url) => {
+    try {
+      const response = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+      return response.ok ? await response.text() : "";
+    } catch { return ""; }
+  }));
+  const links = searchPages.flatMap((html) =>
+    [...html.matchAll(/href=["']([^"']+)["']/gi)].map((match) => decodeHtml(match[1])),
+  ).filter((href) => {
+    try {
+      const path = decodeURIComponent(new URL(href, HASHULCHAN).pathname);
+      return path.startsWith("/מתכונים/") && path !== "/מתכונים/";
+    } catch { return false; }
+  });
+  const urls = [...new Set(links.map((href) => new URL(href, HASHULCHAN).toString()))].slice(0, 100);
+  const meals: Meal[] = [];
+  for (let start = 0; start < urls.length; start += 8) {
+    const batch = await Promise.all(urls.slice(start, start + 8).map(async (url) => {
+      try {
+        const page = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+        return page.ok ? parseHashulchanRecipe(await page.text(), url) : null;
+      } catch { return null; }
+    }));
+    meals.push(...batch.filter((meal): meal is Meal => Boolean(meal)));
+  }
+  return meals;
 }
 
 async function getJson(url: string) {
@@ -107,6 +210,7 @@ export async function GET(request: Request) {
       requestedIngredients.push(translated.toLowerCase().replace(/\s+/g, " ").trim());
     }
 
+    const hashulchanPromise = rawQuery ? searchHashulchan(rawQuery).catch(() => [] as Meal[]) : Promise.resolve([] as Meal[]);
     const summaries = new Map<string, Meal>();
     const candidateScores = new Map<string, number>();
 
@@ -208,17 +312,38 @@ export async function GET(request: Request) {
     const typedResults = complete.filter((meal) =>
       matchesRequestedType(meal, type) && mealMatchesRequiredTerms(meal, strictQueryTerms),
     );
+    const sourceTerms = requiredSourceTerms(rawQuery);
+    const hashulchanResults = (await hashulchanPromise).filter((meal) =>
+      matchesRequestedType(meal, type) && mealMatchesRequiredTerms(meal, sourceTerms),
+    );
+    for (const meal of hashulchanResults) {
+      const names = Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "").join(" ");
+      ingredientMatches[meal.idMeal] = rawIngredients.filter((ingredient) =>
+        normalizeSearchText(names).includes(normalizeSearchText(ingredient)),
+      ).length;
+    }
+    const combinedSource = hashulchanResults.length ? hashulchanResults : typedResults;
+    const combined = [...combinedSource]
+      .filter((meal, index, list) => list.findIndex((candidate) => normalizeSearchText(candidate.strMeal) === normalizeSearchText(meal.strMeal)) === index)
+      .sort((a, b) => {
+        const byRatings = Number(b.ratingCount ?? 0) - Number(a.ratingCount ?? 0);
+        if (byRatings) return byRatings;
+        const byIngredients = (ingredientMatches[b.idMeal] ?? 0) - (ingredientMatches[a.idMeal] ?? 0);
+        if (byIngredients) return byIngredients;
+        return (b.strProvider === "השולחן" ? 1 : 0) - (a.strProvider === "השולחן" ? 1 : 0);
+      });
 
     return Response.json(
       {
-        meals: typedResults.slice(0, 10),
+        meals: combined.slice(0, 10),
         query: query || null,
         requiredQueryTerms: strictQueryTerms,
         requestedIngredients,
         ingredientMatches,
-        provider: "TheMealDB",
+        provider: "השולחן + TheMealDB",
+        sourceCounts: { hashulchan: hashulchanResults.length, themealdb: typedResults.length },
       },
-      { headers: { "Cache-Control": "private, max-age=600" } },
+      { headers: { "Cache-Control": "no-store" } },
     );
   } catch {
     return Response.json(

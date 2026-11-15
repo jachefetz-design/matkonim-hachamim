@@ -42,9 +42,9 @@ const restrictionLabels: Record<RestrictionKey, { title: string; note: string }>
   lowcarb: { title: "דל פחמימות", note: "סוכר, דגנים, אורז ותפוחי אדמה" },
 };
 const triggerPatterns: Record<RestrictionKey, RegExp> = {
-  gluten: /\b(flour|wheat|bread|breadcrumbs|pasta|spaghetti|noodle|couscous|barley|semolina|soy sauce|tortilla|cracker|pastry)\b/i,
-  dairy: /\b(milk|cheese|butter|cream|yogurt|yoghurt|whey|mascarpone|mozzarella|parmesan|cheddar|feta|ricotta)\b/i,
-  lowcarb: /\b(sugar|honey|syrup|flour|bread|rice|potato|pasta|noodle|couscous|corn|beans|lentil|oats|barley|chocolate)\b/i,
+  gluten: /flour|wheat|bread|breadcrumbs|pasta|spaghetti|noodle|couscous|barley|semolina|soy sauce|tortilla|cracker|pastry|קמח|חיטה|לחם|פירורי לחם|פסטה|אטריות|קוסקוס|שעורה|סולת|רוטב סויה|טורטייה/i,
+  dairy: /milk|cheese|butter|cream|yogurt|yoghurt|whey|mascarpone|mozzarella|parmesan|cheddar|feta|ricotta|חלב|גבינ|חמאה|שמנת|יוגורט|מסקרפונה|מוצרלה|פרמזן|פטה|ריקוטה/i,
+  lowcarb: /sugar|honey|syrup|flour|bread|rice|potato|pasta|noodle|couscous|corn|beans|lentil|oats|barley|chocolate|סוכר|דבש|סירופ|קמח|לחם|אורז|תפוח אדמה|פסטה|אטריות|קוסקוס|תירס|שעועית|עדשים|שיבולת שועל|שעורה|שוקולד/i,
 };
 const defaultForm: FormState = {
   type: "fish", query: "", language: "he", servings: 4, maxTime: "", ingredients: [],
@@ -108,15 +108,15 @@ function categoryInHebrew(category: string | null) {
   const categories: Record<string, string> = {
     Beef: "בשר בקר", Chicken: "עוף", Lamb: "בשר טלה", Seafood: "דגים ופירות ים",
     Dessert: "קינוח", Starter: "מנה ראשונה", Side: "תוספת", Vegetarian: "צמחוני",
-    Breakfast: "ארוחת בוקר", Pasta: "פסטה", Miscellaneous: "כללי",
+    Breakfast: "ארוחת בוקר", Pasta: "פסטה", Miscellaneous: "כללי", "השולחן": "מתכון ישראלי",
   };
   return category ? categories[category] || "מתכון" : "מתכון";
 }
 function departmentFor(name: string) {
-  if (/chicken|beef|lamb|pork|meat|turkey/i.test(name)) return "בשר ועוף";
-  if (/fish|salmon|tuna|cod|shrimp|prawn|seafood/i.test(name)) return "דגים ופירות ים";
-  if (/milk|cheese|butter|cream|yogurt|egg/i.test(name)) return "מקרר וביצים";
-  if (/onion|garlic|tomato|pepper|carrot|lemon|lime|herb|parsley|coriander|spinach|mushroom|potato|apple|banana/i.test(name)) return "פירות וירקות";
+  if (/chicken|beef|lamb|pork|meat|turkey|עוף|בשר|בקר|טלה|הודו|פרגית/i.test(name)) return "בשר ועוף";
+  if (/fish|salmon|tuna|cod|shrimp|prawn|seafood|דג|סלמון|טונה|בקלה|שרימפס/i.test(name)) return "דגים ופירות ים";
+  if (/milk|cheese|butter|cream|yogurt|egg|חלב|גבינ|חמאה|שמנת|יוגורט|ביצ/i.test(name)) return "מקרר וביצים";
+  if (/onion|garlic|tomato|pepper|carrot|lemon|lime|herb|parsley|coriander|spinach|mushroom|potato|apple|banana|בצל|שום|עגבני|פלפל|גזר|לימון|עשבי|פטרוזיליה|כוסברה|תרד|פטריות|תפוח|בננה/i.test(name)) return "פירות וירקות";
   if (/frozen|ice/i.test(name)) return "קפואים";
   return "מזווה ותבלינים";
 }
@@ -169,6 +169,7 @@ export default function Home() {
     event.preventDefault(); setLoading(true); setError(""); setSelected(null); setTranslatingTitles(false);
     try {
       const params = new URLSearchParams({
+        v: "3",
         type: form.type, query: form.query, language: form.language,
         ingredients: form.ingredients.join("|"),
       });
@@ -208,6 +209,14 @@ export default function Home() {
   async function translateMeal(meal: Meal) {
     setTranslating(true); setTranslationError("");
     const ingredients = mealIngredients(meal);
+    if (meal.strLanguage === "he") {
+      setTranslatedTitle(meal.strMeal);
+      setTranslatedIngredients(ingredients.map((item) => item.name));
+      setTranslatedMeasures(ingredients.map((item) => item.measure));
+      setTranslatedInstruction(meal.strInstructions);
+      setTranslating(false);
+      return;
+    }
     try {
       const translated = await translateBatch([
         meal.strMeal,
@@ -321,22 +330,22 @@ export default function Home() {
 
       <section id="results" className="results-section no-print" aria-live="polite">
         {error && <div className="error-banner"><AlertTriangle size={20} />{error}</div>}
-        {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">תוצאות מהעולם</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>הכותרות תורגמו אוטומטית. תמיד בדוק את המקור.</p></div>}
-        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>מטבח עולמי</span></div><div className="recipe-card-body"><h3>{titles[meal.idMeal] || (translatingTitles ? "מתרגם את שם המתכון..." : "מתכון מהמאגר")}</h3><div className="meta-row"><span><BookOpen size={14} />{categoryInHebrew(meal.strCategory)}</span><span><Clock3 size={14} />זמן לא צוין</span></div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? "נמצאו רכיבים המחייבים בדיקה" : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
+        {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">התוצאות המתאימות ביותר</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>התוצאות מ״השולחן״ ממוינות לפי מספר הדירוגים שפורסם במקור.</p></div>}
+        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>{meal.strProvider || "TheMealDB"}</span></div><div className="recipe-card-body"><h3>{meal.strLanguage === "he" ? meal.strMeal : (titles[meal.idMeal] || (translatingTitles ? "מתרגם את שם המתכון..." : "מתכון מהמאגר"))}</h3><div className="meta-row"><span><BookOpen size={14} />{categoryInHebrew(meal.strCategory)}</span><span><Clock3 size={14} />זמן לא צוין</span>{Number(meal.ratingCount || 0) > 0 && <span className="rating-count">★ {meal.ratingCount} דירוגים</span>}</div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? "נמצאו רכיבים המחייבים בדיקה" : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
         {meals.length > 0 && visibleMeals.length === 0 && <div className="empty-state"><Fish size={32} /><h3>כל התוצאות סוננו בגלל רגישות מחמירה</h3><p>נסה חיפוש אחר או שנה רגישות ל״העדפה״ כדי לראות מתכונים עם אזהרות.</p></div>}
       </section>
 
       {selected && <section id="recipe-workspace" className="recipe-workspace">
-        <div className="report-hero"><img src={selected.strMealThumb} alt="" /><div><span className="eyebrow">המתכון שבחרת</span><h2>{translatedTitle || "מתרגם את שם המתכון..."}</h2><div className="meta-row"><span><BookOpen size={15} />מתכון מתורגם לעברית</span><span><UtensilsCrossed size={15} />ל־{form.servings} סועדים</span></div></div></div>
+        <div className="report-hero"><img src={selected.strMealThumb} alt="" /><div><span className="eyebrow">המתכון שבחרת</span><h2>{translatedTitle || "מתרגם את שם המתכון..."}</h2><div className="meta-row"><span><BookOpen size={15} />{selected.strProvider === "השולחן" ? "מתכון מקורי בעברית" : "מתכון מתורגם לעברית"}</span><span><UtensilsCrossed size={15} />ל־{form.servings} סועדים</span></div></div></div>
         {translating && <div className="translation-status no-print"><LoaderCircle className="spin" size={18} />מתרגם את המתכון לעברית...</div>}
         {translationError && <div className="translation-error no-print"><AlertTriangle size={20} /><div><b>התרגום טרם הושלם</b><p>{translationError}</p></div><button type="button" onClick={() => translateMeal(selected)}>נסה לתרגם שוב</button></div>}
         <div className="adjust-bar no-print"><div><b>התאמת כמויות</b><small>מאגר המקור אינו מציין מספר מנות. הזן את מספר המנות המקורי לפי שיקול דעתך.</small></div><label>מנות במקור <input type="number" min="1" max="30" value={originalServings} onChange={(event) => setOriginalServings(Math.max(1, Number(event.target.value)))} /></label><span className="factor-pill">מקדם ×{prettyNumber(factor)}</span></div>
         {warnings.length > 0 && <div className="warning-box"><AlertTriangle size={21} /><div><b>בדיקות בטיחות</b>{warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>}
         {!translating && !translationError && <div className="report-columns"><section className="ingredients-panel"><div className="panel-title"><ShoppingBasket size={20} /><h3>מצרכים ורשימת קניות</h3></div>{Object.entries(groupedIngredients).map(([department, rows]) => <div className="department" key={department}><h4>{department}</h4>{rows.map((row, index) => <label className="ingredient-row" key={`${row.originalName}-${index}`}><input type="checkbox" /><span><b>{row.hebrewName}</b></span><em>{row.scaledMeasure || "לפי הצורך"}</em></label>)}</div>)}</section><section className="steps-panel"><div className="panel-title"><UtensilsCrossed size={20} /><h3>אופן ההכנה</h3></div>{steps.map((step, index) => <div className="step" key={`${index}-${step.slice(0, 20)}`}><span>{index + 1}</span><p>{step}</p></div>)}</section></div>}
-        <div className="source-box"><b>מקור ושקיפות</b><p>המתכון הגיע מ־TheMealDB ותורגם אוטומטית. הכמויות הותאמו מתמטית; באפייה, זמני הכנה וגודל תבנית עשויים לדרוש התאמה ידנית.</p><a href={selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`} target="_blank" rel="noreferrer">פתח את המקור <ExternalLink size={14} /></a></div>
+        <div className="source-box"><b>מקור ושקיפות</b><p>{selected.strProvider === "השולחן" ? `המתכון התקבל מאתר “השולחן” ומוצג בעברית כפי שפורסם. מספר הדירוגים במועד החיפוש: ${selected.ratingCount || "0"}.` : "המתכון הגיע מ־TheMealDB ותורגם אוטומטית."} הכמויות הותאמו מתמטית; באפייה, זמני הכנה וגודל תבנית עשויים לדרוש התאמה ידנית.</p><a href={selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`} target="_blank" rel="noreferrer">פתח את המקור <ExternalLink size={14} /></a></div>
         {!translating && !translationError && <div className="action-bar no-print"><button className="secondary-button" onClick={saveRecipe}><Heart size={18} />שמור במאגר שלי</button><button className="secondary-button" onClick={() => window.print()}><Printer size={18} />דוח PDF / הדפסה</button><button className="excel-button" onClick={exportExcel}><FileSpreadsheet size={18} />הורד Excel</button></div>}
       </section>}
-      <footer className="no-print"><span><Sparkles size={15} /> מתכונים חכמים</span><p>המידע מיועד לתכנון קולינרי. במקרה של אלרגיה יש לבדוק תוויות, סביבת ייצור וזיהום משני.</p><a href="https://www.themealdb.com/api.php" target="_blank" rel="noreferrer">Recipe data by TheMealDB</a></footer>
+      <footer className="no-print"><span><Sparkles size={15} /> מתכונים חכמים</span><p>המידע מיועד לתכנון קולינרי. במקרה של אלרגיה יש לבדוק תוויות, סביבת ייצור וזיהום משני.</p><a href="https://www.hashulchan.co.il/מתכונים/" target="_blank" rel="noreferrer">מקור מתכונים: השולחן</a></footer>
     </main>
   );
 }
