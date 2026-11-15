@@ -3,7 +3,7 @@
 import {
   AlertTriangle, BookOpen, Check, ChevronLeft, Clock3, ExternalLink,
   FileSpreadsheet, Fish, Heart, LoaderCircle, Minus, Plus, Printer,
-  Search, ShoppingBasket, Sparkles, UtensilsCrossed,
+  Search, ShoppingBasket, Sparkles, UserRound, UtensilsCrossed,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -281,34 +281,43 @@ export default function Home() {
   }, {});
 
   return (
-    <main className="min-h-screen bg-[#f7f4ec] text-[#21352d]">
-      <header className="site-header no-print"><div className="brand-mark"><UtensilsCrossed size={22} /></div><div><p className="brand-name">מתכונים חכמים</p><p className="brand-subtitle">מהרעיון, דרך הקניות, ועד לצלחת</p></div><div className="saved-pill"><Heart size={16} /> {savedCount} שמורים</div></header>
-      <section className="hero no-print"><div className="hero-copy"><span className="eyebrow"><Sparkles size={15} /> מתכון שמתאים בדיוק אליך</span><h1>מה מתחשק לך להכין היום?</h1><p>בחר סוג מנה, סמן רגישויות ומספר סועדים. נחפש בעולם, נתרגם לעברית ונארגן הכול לביצוע.</p></div><div className="hero-illustration" aria-hidden="true"><span className="plate">🍽️</span><span className="leaf leaf-one">🌿</span><span className="leaf leaf-two">🍋</span></div></section>
+    <main className="app-shell min-h-screen">
+      <header className="site-header no-print">
+        <a className="brand" href="#top" aria-label="מתכונים חכמים — דף הבית"><span className="brand-mark"><UtensilsCrossed size={19} /></span><span className="brand-name">מתכונים חכמים</span></a>
+        <nav className="main-nav" aria-label="ניווט ראשי"><a className="active" href="#search">חיפוש מתכונים</a><a href="#recipe-workspace">המתכונים שלי</a><a href="#results">מועדפים</a></nav>
+        <div className="header-actions"><button type="button" aria-label="פרופיל"><UserRound size={18} /></button><button type="button" aria-label={`${savedCount} מתכונים שמורים`}><Heart size={18} /><span>{savedCount}</span></button></div>
+      </header>
 
-      <form onSubmit={handleSearch} className="search-panel no-print">
-        <div className="section-heading"><span>1</span><div><h2>סוג המתכון</h2><p>אפשר לבחור קטגוריה ולהוסיף תיאור חופשי</p></div></div>
-        <div className="type-grid">{recipeTypes.map((type) => <button key={type.value} type="button" onClick={() => setForm({ ...form, type: type.value })} className={`type-card ${form.type === type.value ? "selected" : ""}`}><b>{type.icon}</b><span>{type.label}</span>{form.type === type.value && <Check size={17} />}</button>)}</div>
-        <div className="form-grid">
+      <section id="top" className="hero-stage no-print">
+        <img className="hero-photo" src="https://www.themealdb.com/images/media/meals/wxywrq1468235067.jpg" alt="טארט תפוחים זהוב על שולחן" />
+        <div className="hero-card"><span className="eyebrow"><Sparkles size={14} /> החיפוש הקולינרי שלך</span><h1>מה מתחשק לך<br />להכין היום?</h1><p>בוחרים כיוון, מסמנים מה יש בבית — ומקבלים מתכון מתורגם, מותאם ומוכן לביצוע.</p><a href="#search">מתחילים לבחור <ChevronLeft size={17} /></a></div>
+        <div className="hero-collage" aria-hidden="true"><img src="https://www.themealdb.com/images/media/meals/1548772327.jpg" alt="" /><img src="https://www.themealdb.com/images/media/meals/xvsurr1511719182.jpg" alt="" /><img src="https://www.themealdb.com/images/media/meals/uvuyxu1503067369.jpg" alt="" /></div>
+      </section>
+
+      <form id="search" onSubmit={handleSearch} className="search-panel no-print">
+        <div className="search-intro"><div><span className="eyebrow">חיפוש מדויק בשלושה צעדים</span><h2>מרעיון לארוחה, בלי לנחש</h2></div><p>שלב 2 הוא אופציונלי — אפשר לחפש לפי סוג המתכון בלבד.</p></div>
+        <div className="form-grid quick-settings">
           <label className="field wide"><span>מה תרצה לחפש?</span><div className="input-with-icon"><Search size={18} /><input value={form.query} onChange={(event) => setForm({ ...form, query: event.target.value })} placeholder="לדוגמה: סלמון בתנור, טארט תפוחים..." /></div></label>
           <label className="field"><span>שפת החיפוש</span><select value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value })}>{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="field"><span>מספר סועדים</span><div className="number-control"><button type="button" onClick={() => setForm({ ...form, servings: Math.max(1, form.servings - 1) })}><Minus size={16} /></button><strong>{form.servings}</strong><button type="button" onClick={() => setForm({ ...form, servings: Math.min(30, form.servings + 1) })}><Plus size={16} /></button></div></label>
           <label className="field"><span>זמן מרבי — העדפה</span><select value={form.maxTime} onChange={(event) => setForm({ ...form, maxTime: event.target.value })}><option value="">לא משנה</option><option value="30">עד 30 דקות</option><option value="60">עד שעה</option><option value="120">עד שעתיים</option></select></label>
         </div>
-        <div className="section-heading products-title"><span>2</span><div><h2>מה יש לי בבית?</h2><p>הוסף עד חמישה מוצרים עיקריים מהמקרר או המזווה. אין צורך להוסיף מלח, שמן ותבלינים בסיסיים.</p></div></div>
-        <div className="products-picker">
+        <div className="workflow-grid">
+          <section className="workflow-card type-workflow"><div className="section-heading"><span>1</span><div><h2>סוג המתכון</h2><p>בחר את הכיוון המתאים</p></div></div><div className="type-grid">{recipeTypes.map((type) => <button key={type.value} type="button" onClick={() => setForm({ ...form, type: type.value })} className={`type-card ${form.type === type.value ? "selected" : ""}`}><b>{type.icon}</b><span>{type.label}</span>{form.type === type.value && <Check size={15} />}</button>)}</div></section>
+          <section className="workflow-card"><div className="section-heading"><span>2</span><div><h2>מה יש לי בבית?</h2><p>אופציונלי · עד חמישה מוצרים</p></div></div><div className="products-picker">
           <div className="product-entry">
             <input aria-label="מוצר זמין" value={ingredientDraft} onChange={(event) => setIngredientDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === ",") { event.preventDefault(); addIngredient(); } }} placeholder="לדוגמה: גבינת פטה, קישואים, קמח..." disabled={form.ingredients.length >= 5} />
-            <button type="button" onClick={() => addIngredient()} disabled={!ingredientDraft.trim() || form.ingredients.length >= 5}><Plus size={17} /> הוסף מוצר</button>
+            <button type="button" aria-label="הוסף מוצר" onClick={() => addIngredient()} disabled={!ingredientDraft.trim() || form.ingredients.length >= 5}><Plus size={17} /></button>
           </div>
           <div className="selected-products">{form.ingredients.map((ingredient) => <span key={ingredient}>{ingredient}<button type="button" aria-label={`הסר ${ingredient}`} onClick={() => removeIngredient(ingredient)}>×</button></span>)}{!form.ingredients.length && <small>עדיין לא נבחרו מוצרים — אפשר לחפש גם לפי סוג המתכון בלבד.</small>}</div>
           <div className="suggestion-row"><b>הוספה מהירה:</b>{ingredientSuggestions.map((ingredient) => <button type="button" key={ingredient} disabled={form.ingredients.includes(ingredient) || form.ingredients.length >= 5} onClick={() => addIngredient(ingredient)}>{ingredient}</button>)}</div>
+        </div></section>
+          <section className="workflow-card"><div className="section-heading"><span>3</span><div><h2>העדפות ורגישויות</h2><p>בחר את רמת ההתאמה</p></div></div><div className="restriction-grid">{(Object.keys(restrictionLabels) as RestrictionKey[]).map((key) => <div className={`restriction-card ${form.restrictions[key] !== "off" ? "active" : ""}`} key={key}><div><b>{restrictionLabels[key].title}</b><small>{restrictionLabels[key].note}</small></div><select aria-label={`רמת ${restrictionLabels[key].title}`} value={form.restrictions[key]} onChange={(event) => setForm({ ...form, restrictions: { ...form.restrictions, [key]: event.target.value as RestrictionMode } })}><option value="off">לא נדרש</option><option value="preference">העדפה</option><option value="strict">רגישות / אלרגיה</option></select></div>)}</div><p className="safety-caption">רגישות מחמירה מסננת רכיבים ברורים, אך אינה מחליפה בדיקה רפואית.</p></section>
         </div>
-        <div className="section-heading restrictions-title"><span>3</span><div><h2>העדפות ורגישויות</h2><p>רגישות מחמירה מסננת רכיבים ברורים, אך אינה מחליפה בדיקה רפואית</p></div></div>
-        <div className="restriction-grid">{(Object.keys(restrictionLabels) as RestrictionKey[]).map((key) => <div className={`restriction-card ${form.restrictions[key] !== "off" ? "active" : ""}`} key={key}><div><b>{restrictionLabels[key].title}</b><small>{restrictionLabels[key].note}</small></div><select aria-label={`רמת ${restrictionLabels[key].title}`} value={form.restrictions[key]} onChange={(event) => setForm({ ...form, restrictions: { ...form.restrictions, [key]: event.target.value as RestrictionMode } })}><option value="off">לא נדרש</option><option value="preference">העדפה</option><option value="strict">רגישות / אלרגיה</option></select></div>)}</div>
         <button className="primary-button" disabled={loading} type="submit">{loading ? <LoaderCircle className="spin" size={19} /> : <Search size={19} />}{loading ? "מחפש ומתאים..." : "מצא מתכונים לפי הבחירות"}</button>
       </form>
 
-      <section className="results-section no-print" aria-live="polite">
+      <section id="results" className="results-section no-print" aria-live="polite">
         {error && <div className="error-banner"><AlertTriangle size={20} />{error}</div>}
         {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">תוצאות מהעולם</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>הכותרות תורגמו אוטומטית. תמיד בדוק את המקור.</p></div>}
         <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>מטבח עולמי</span></div><div className="recipe-card-body"><h3>{titles[meal.idMeal] || (translatingTitles ? "מתרגם את שם המתכון..." : "מתכון מהמאגר")}</h3><div className="meta-row"><span><BookOpen size={14} />{categoryInHebrew(meal.strCategory)}</span><span><Clock3 size={14} />זמן לא צוין</span></div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? "נמצאו רכיבים המחייבים בדיקה" : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
