@@ -39,7 +39,7 @@ const languages = [
 ];
 const restrictionLabels: Record<RestrictionKey, { title: string; note: string }> = {
   gluten: { title: "ללא גלוטן", note: "קמח, לחם, פסטה, סויה ועוד" },
-  dairy: { title: "ללא מוצרי חלב", note: "חלב, גבינות, חמאה ושמנת" },
+  dairy: { title: "ללא מוצרי חלב / לקטוז", note: "חיפוש גם במאגר ייעודי ללא חלב; מתאים כבסיס מחמיר לרגישות ללקטוז" },
   lowcarb: { title: "דל פחמימות", note: "סוכר, דגנים, אורז ותפוחי אדמה" },
 };
 const triggerPatterns: Record<RestrictionKey, RegExp> = {
@@ -60,6 +60,8 @@ function mealIngredients(meal: Meal) {
   }).filter((item): item is { name: string; measure: string } => Boolean(item));
 }
 function restrictionHits(meal: Meal, key: RestrictionKey) {
+  if (key === "gluten" && meal.strGlutenFreeSource === "true") return [];
+  if (key === "dairy" && meal.strDairyFreeSource === "true") return [];
   return mealIngredients(meal).map((item) => item.name).filter((name) => {
     if (key === "gluten" && /gluten[- ]?free flour|almond flour|coconut flour|rice flour|corn flour|cornstarch|tamari|קמח ללא גלוטן|קמח שקדים|קמח קוקוס|קמח אורז|קמח תירס|קורנפלור|טמארי/i.test(name)) return false;
     return triggerPatterns[key].test(name);
@@ -148,6 +150,7 @@ export default function Home() {
   const [savedCount, setSavedCount] = useState(0);
   const [ingredientDraft, setIngredientDraft] = useState("");
   const [ingredientMatches, setIngredientMatches] = useState<Record<string, number>>({});
+  const [sourceCounts, setSourceCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem("saved-recipes") || "[]") as unknown[];
@@ -173,18 +176,18 @@ export default function Home() {
     event.preventDefault(); setLoading(true); setError(""); setSelected(null); setTranslatingTitles(false);
     try {
       const params = new URLSearchParams({
-        v: "6",
+        v: "9",
         type: form.type, query: form.query, language: form.language,
         ingredients: form.ingredients.join("|"),
         restrictions: Object.entries(form.restrictions).filter(([, mode]) => mode !== "off").map(([key, mode]) => `${key}:${mode}`).join("|"),
       });
       const response = await fetch(`/api/recipes?${params}`);
-      const payload = (await response.json()) as { meals?: Meal[]; error?: string; ingredientMatches?: Record<string, number> };
+      const payload = (await response.json()) as { meals?: Meal[]; error?: string; ingredientMatches?: Record<string, number>; sourceCounts?: Record<string, number> };
       if (!response.ok) throw new Error(payload.error || "החיפוש נכשל");
-      const found = payload.meals ?? []; setMeals(found); setTitles({}); setIngredientMatches(payload.ingredientMatches ?? {});
+      const found = payload.meals ?? []; setMeals(found); setTitles({}); setIngredientMatches(payload.ingredientMatches ?? {}); setSourceCounts(payload.sourceCounts ?? {});
       if (!found.length) setError(form.query.trim()
         ? `לא נמצאו מתכונים שבהם “${form.query.trim()}” מופיע בשם המתכון או ברשימת המצרכים. נסה מילה מדויקת אחרת.`
-        : "לא נמצאו מתכונים מתאימים. נסה קטגוריה אחרת.");
+        : form.ingredients.length ? "לא נמצא מתכון מהסוג שנבחר שמשתמש באחד המוצרים שסימנת. נסה מוצר אחר או סוג מתכון אחר." : "לא נמצאו מתכונים מתאימים. נסה קטגוריה אחרת.");
       if (found.length) {
         setTranslatingTitles(true);
         try {
@@ -193,7 +196,7 @@ export default function Home() {
         } catch { setTitles({}); } finally { setTranslatingTitles(false); }
       }
     } catch (searchError) {
-      setMeals([]); setError(searchError instanceof Error ? searchError.message : "אירעה תקלה בחיפוש");
+      setMeals([]); setSourceCounts({}); setError(searchError instanceof Error ? searchError.message : "אירעה תקלה בחיפוש");
     } finally { setLoading(false); }
   }
   function addIngredient(value = ingredientDraft) {
@@ -306,6 +309,7 @@ export default function Home() {
   const groupedIngredients = ingredientRows.reduce<Record<string, Ingredient[]>>((groups, row) => {
     (groups[row.department] ||= []).push(row); return groups;
   }, {});
+  const activeSourceCount = Object.values(sourceCounts).filter((count) => count > 0).length;
 
   return (
     <main className="app-shell min-h-screen">
@@ -346,22 +350,22 @@ export default function Home() {
 
       <section id="results" className="results-section no-print" aria-live="polite">
         {error && <div className="error-banner"><AlertTriangle size={20} />{error}</div>}
-        {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">התוצאות המתאימות ביותר</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>התוצאות מ״השולחן״ ממוינות לפי מספר הדירוגים שפורסם במקור.</p></div>}
+        {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">התוצאות המתאימות ביותר</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>החיפוש רץ במקביל ב־{activeSourceCount || 1} מקורות. המוצרים שיש בבית משפיעים תחילה על הדירוג, ואחריהם דירוגי הקוראים והתאמה לסוג המתכון.</p></div>}
         <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>{meal.strProvider || "TheMealDB"}</span></div><div className="recipe-card-body"><h3>{meal.strLanguage === "he" ? meal.strMeal : (titles[meal.idMeal] || (translatingTitles ? "מתרגם את שם המתכון..." : "מתכון מהמאגר"))}</h3><div className="meta-row"><span><BookOpen size={14} />{categoryInHebrew(meal.strCategory)}</span><span><Clock3 size={14} />זמן לא צוין</span>{Number(meal.ratingCount || 0) > 0 && <span className="rating-count">★ {meal.ratingCount} דירוגים</span>}</div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? "נמצאו רכיבים המחייבים בדיקה" : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
         {meals.length > 0 && visibleMeals.length === 0 && <div className="empty-state"><Fish size={32} /><h3>כל התוצאות סוננו בגלל רגישות מחמירה</h3><p>נסה חיפוש אחר או שנה רגישות ל״העדפה״ כדי לראות מתכונים עם אזהרות.</p></div>}
       </section>
 
       {selected && <section id="recipe-workspace" className="recipe-workspace">
-        <div className="report-hero"><img src={selected.strMealThumb} alt="" /><div><span className="eyebrow">המתכון שבחרת</span><h2>{translatedTitle || "מתרגם את שם המתכון..."}</h2><div className="meta-row"><span><BookOpen size={15} />{selected.strProvider === "השולחן" ? "מתכון מקורי בעברית" : "מתכון מתורגם לעברית"}</span><span><UtensilsCrossed size={15} />ל־{form.servings} סועדים</span></div></div></div>
+        <div className="report-hero"><img src={selected.strMealThumb} alt="" /><div><span className="eyebrow">המתכון שבחרת</span><h2>{translatedTitle || "מתרגם את שם המתכון..."}</h2><div className="meta-row"><span><BookOpen size={15} />{selected.strLanguage === "he" ? "מתכון מקורי בעברית" : "מתכון מתורגם לעברית"}</span><span><UtensilsCrossed size={15} />ל־{form.servings} סועדים</span></div></div></div>
         {translating && <div className="translation-status no-print"><LoaderCircle className="spin" size={18} />מתרגם את המתכון לעברית...</div>}
         {translationError && <div className="translation-error no-print"><AlertTriangle size={20} /><div><b>התרגום טרם הושלם</b><p>{translationError}</p></div><button type="button" onClick={() => translateMeal(selected)}>נסה לתרגם שוב</button></div>}
         <div className="adjust-bar no-print"><div><b>התאמת כמויות</b><small>מאגר המקור אינו מציין מספר מנות. הזן את מספר המנות המקורי לפי שיקול דעתך.</small></div><label>מנות במקור <input type="number" min="1" max="30" value={originalServings} onChange={(event) => setOriginalServings(Math.max(1, Number(event.target.value)))} /></label><span className="factor-pill">מקדם ×{prettyNumber(factor)}</span></div>
         {warnings.length > 0 && <div className="warning-box"><AlertTriangle size={21} /><div><b>בדיקות בטיחות</b>{warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>}
         {!translating && !translationError && <div className="report-columns"><section className="ingredients-panel"><div className="panel-title"><ShoppingBasket size={20} /><h3>מצרכים ורשימת קניות</h3></div>{Object.entries(groupedIngredients).map(([department, rows]) => <div className="department" key={department}><h4>{department}</h4>{rows.map((row, index) => <label className="ingredient-row" key={`${row.originalName}-${index}`}><input type="checkbox" /><span><b>{row.hebrewName}</b></span><em>{row.scaledMeasure || "לפי הצורך"}</em></label>)}</div>)}</section><section className="steps-panel"><div className="panel-title"><UtensilsCrossed size={20} /><h3>אופן ההכנה</h3></div>{steps.map((step, index) => <div className="step" key={`${index}-${step.slice(0, 20)}`}><span>{index + 1}</span><p>{step}</p></div>)}</section></div>}
-        <div className="source-box"><b>מקור ושקיפות</b><p>{selected.strProvider === "השולחן" ? `המתכון התקבל מאתר “השולחן” ומוצג בעברית כפי שפורסם. מספר הדירוגים במועד החיפוש: ${selected.ratingCount || "0"}.` : selected.strProvider === "Coeliac UK" ? "המתכון התקבל ממאגר המתכונים הייעודי ללא גלוטן של Coeliac UK ותורגם במלואו לעברית." : "המתכון הגיע מ־TheMealDB ותורגם במלואו לעברית."} הכמויות הותאמו מתמטית; באפייה, זמני הכנה וגודל תבנית עשויים לדרוש התאמה ידנית.</p><a href={selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`} target="_blank" rel="noreferrer">פתח את המקור <ExternalLink size={14} /></a></div>
+        <div className="source-box"><b>מקור ושקיפות</b><p>{selected.strLanguage === "he" ? `המתכון התקבל מאתר “${selected.strProvider || "מקור ישראלי"}” ומוצג בעברית כפי שפורסם.` : selected.strProvider === "Coeliac UK" ? "המתכון התקבל ממאגר המתכונים הייעודי ללא גלוטן של Coeliac UK ותורגם במלואו לעברית." : selected.strProvider === "Go Dairy Free" ? "המתכון התקבל ממאגר המתכונים הייעודי ללא מוצרי חלב של Go Dairy Free ותורגם במלואו לעברית." : `המתכון התקבל מ־${selected.strProvider || "TheMealDB"} ותורגם במלואו לעברית.`} הכמויות הותאמו מתמטית; באפייה, זמני הכנה וגודל תבנית עשויים לדרוש התאמה ידנית.</p><a href={selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`} target="_blank" rel="noreferrer">פתח את המקור <ExternalLink size={14} /></a></div>
         {!translating && !translationError && <div className="action-bar no-print"><button className="secondary-button" onClick={saveRecipe}><Heart size={18} />שמור במאגר שלי</button><button className="secondary-button" onClick={() => window.print()}><Printer size={18} />דוח PDF / הדפסה</button><button className="excel-button" onClick={exportExcel}><FileSpreadsheet size={18} />הורד Excel</button></div>}
       </section>}
-      <footer className="no-print"><span><Sparkles size={15} /> מתכונים חכמים</span><p>המידע מיועד לתכנון קולינרי. במקרה של אלרגיה יש לבדוק תוויות, סביבת ייצור וזיהום משני.</p><a href="https://www.hashulchan.co.il/מתכונים/" target="_blank" rel="noreferrer">מקור: השולחן</a><a href="https://www.coeliac.org.uk/recipes/" target="_blank" rel="noreferrer">מקור ללא גלוטן: Coeliac UK</a></footer>
+      <footer className="no-print"><span><Sparkles size={15} /> מתכונים חכמים</span><p>המידע מיועד לתכנון קולינרי. במקרה של אלרגיה יש לבדוק תוויות, סביבת ייצור וזיהום משני.</p><a href="https://www.hashulchan.co.il/מתכונים/" target="_blank" rel="noreferrer">השולחן</a><a href="https://nikib.co.il/" target="_blank" rel="noreferrer">ניקי ב</a><a href="https://www.bbcgoodfood.com/recipes" target="_blank" rel="noreferrer">BBC Good Food</a><a href="https://www.coeliac.org.uk/recipes/" target="_blank" rel="noreferrer">Coeliac UK</a><a href="https://godairyfree.org/recipes" target="_blank" rel="noreferrer">Go Dairy Free</a></footer>
     </main>
   );
 }
