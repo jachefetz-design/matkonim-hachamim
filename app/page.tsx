@@ -14,6 +14,7 @@ type RestrictionMode = "off" | "preference" | "strict";
 type RestrictionKey = "gluten" | "dairy" | "lowcarb";
 type FormState = {
   type: string; query: string; language: string; servings: number; maxTime: string;
+  ingredients: string[];
   restrictions: Record<RestrictionKey, RestrictionMode>;
 };
 type Ingredient = {
@@ -21,6 +22,7 @@ type Ingredient = {
 };
 
 const recipeTypes = [
+  { value: "cakes", label: "עוגות", icon: "🎂" },
   { value: "savory_bake", label: "מאפה מלוח", icon: "🥐" },
   { value: "sweet_bake", label: "מאפה מתוק", icon: "🍰" },
   { value: "meat", label: "בשר", icon: "🥩" },
@@ -28,6 +30,7 @@ const recipeTypes = [
   { value: "quiche_savory", label: "קיש או פשטידה מלוחה", icon: "🥧" },
   { value: "pie_sweet", label: "פשטידה או טארט מתוק", icon: "🍮" },
 ];
+const ingredientSuggestions = ["קמח", "ביצים", "גבינה", "עגבניות", "קישואים", "תרד", "שמנת", "עוף"];
 const languages = [
   ["he", "עברית"], ["en", "אנגלית"], ["fr", "צרפתית"], ["it", "איטלקית"],
   ["es", "ספרדית"], ["de", "גרמנית"], ["ar", "ערבית"], ["ru", "רוסית"],
@@ -44,7 +47,7 @@ const triggerPatterns: Record<RestrictionKey, RegExp> = {
   lowcarb: /\b(sugar|honey|syrup|flour|bread|rice|potato|pasta|noodle|couscous|corn|beans|lentil|oats|barley|chocolate)\b/i,
 };
 const defaultForm: FormState = {
-  type: "fish", query: "", language: "he", servings: 4, maxTime: "",
+  type: "fish", query: "", language: "he", servings: 4, maxTime: "", ingredients: [],
   restrictions: { gluten: "off", dairy: "off", lowcarb: "off" },
 };
 
@@ -110,6 +113,8 @@ export default function Home() {
   const [translating, setTranslating] = useState(false);
   const [originalServings, setOriginalServings] = useState(4);
   const [savedCount, setSavedCount] = useState(0);
+  const [ingredientDraft, setIngredientDraft] = useState("");
+  const [ingredientMatches, setIngredientMatches] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem("saved-recipes") || "[]") as unknown[];
@@ -134,11 +139,14 @@ export default function Home() {
   async function handleSearch(event: FormEvent) {
     event.preventDefault(); setLoading(true); setError(""); setSelected(null);
     try {
-      const params = new URLSearchParams({ type: form.type, query: form.query, language: form.language });
+      const params = new URLSearchParams({
+        type: form.type, query: form.query, language: form.language,
+        ingredients: form.ingredients.join("|"),
+      });
       const response = await fetch(`/api/recipes?${params}`);
-      const payload = (await response.json()) as { meals?: Meal[]; error?: string };
+      const payload = (await response.json()) as { meals?: Meal[]; error?: string; ingredientMatches?: Record<string, number> };
       if (!response.ok) throw new Error(payload.error || "החיפוש נכשל");
-      const found = payload.meals ?? []; setMeals(found);
+      const found = payload.meals ?? []; setMeals(found); setIngredientMatches(payload.ingredientMatches ?? {});
       if (!found.length) setError("לא נמצאו מתכונים מתאימים. נסה תיאור קצר יותר או קטגוריה אחרת.");
       if (found.length) {
         try {
@@ -150,6 +158,15 @@ export default function Home() {
     } catch (searchError) {
       setMeals([]); setError(searchError instanceof Error ? searchError.message : "אירעה תקלה בחיפוש");
     } finally { setLoading(false); }
+  }
+  function addIngredient(value = ingredientDraft) {
+    const ingredient = value.trim().replace(/,$/, "");
+    if (!ingredient || form.ingredients.length >= 5 || form.ingredients.some((item) => item.toLowerCase() === ingredient.toLowerCase())) return;
+    setForm({ ...form, ingredients: [...form.ingredients, ingredient] });
+    setIngredientDraft("");
+  }
+  function removeIngredient(ingredient: string) {
+    setForm({ ...form, ingredients: form.ingredients.filter((item) => item !== ingredient) });
   }
   async function chooseMeal(meal: Meal) {
     setSelected(meal); setTranslatedTitle(titles[meal.idMeal] || meal.strMeal);
@@ -188,6 +205,7 @@ export default function Home() {
       ["מתכונים חכמים — סיכום"], ["שם בעברית", translatedTitle], ["שם במקור", selected.strMeal],
       ["קטגוריה", selected.strCategory || ""], ["מטבח", selected.strArea || selected.strCountry || ""],
       ["מספר סועדים", form.servings], ["מנות במתכון המקורי (לפי הזנת המשתמש)", originalServings],
+      ["מוצרים שסומנו כזמינים", form.ingredients.join(", ")],
       ["מקור", selected.strSource || `https://www.themealdb.com/meal/${selected.idMeal}`],
     ]);
     const ingredientsSheet = XLSX.utils.json_to_sheet(ingredientRows.map((row) => ({
@@ -231,15 +249,24 @@ export default function Home() {
           <label className="field"><span>מספר סועדים</span><div className="number-control"><button type="button" onClick={() => setForm({ ...form, servings: Math.max(1, form.servings - 1) })}><Minus size={16} /></button><strong>{form.servings}</strong><button type="button" onClick={() => setForm({ ...form, servings: Math.min(30, form.servings + 1) })}><Plus size={16} /></button></div></label>
           <label className="field"><span>זמן מרבי — העדפה</span><select value={form.maxTime} onChange={(event) => setForm({ ...form, maxTime: event.target.value })}><option value="">לא משנה</option><option value="30">עד 30 דקות</option><option value="60">עד שעה</option><option value="120">עד שעתיים</option></select></label>
         </div>
-        <div className="section-heading restrictions-title"><span>2</span><div><h2>העדפות ורגישויות</h2><p>רגישות מחמירה מסננת רכיבים ברורים, אך אינה מחליפה בדיקה רפואית</p></div></div>
+        <div className="section-heading products-title"><span>2</span><div><h2>מה יש לי בבית?</h2><p>הוסף עד חמישה מוצרים עיקריים מהמקרר או המזווה. אין צורך להוסיף מלח, שמן ותבלינים בסיסיים.</p></div></div>
+        <div className="products-picker">
+          <div className="product-entry">
+            <input aria-label="מוצר זמין" value={ingredientDraft} onChange={(event) => setIngredientDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === ",") { event.preventDefault(); addIngredient(); } }} placeholder="לדוגמה: גבינת פטה, קישואים, קמח..." disabled={form.ingredients.length >= 5} />
+            <button type="button" onClick={() => addIngredient()} disabled={!ingredientDraft.trim() || form.ingredients.length >= 5}><Plus size={17} /> הוסף מוצר</button>
+          </div>
+          <div className="selected-products">{form.ingredients.map((ingredient) => <span key={ingredient}>{ingredient}<button type="button" aria-label={`הסר ${ingredient}`} onClick={() => removeIngredient(ingredient)}>×</button></span>)}{!form.ingredients.length && <small>עדיין לא נבחרו מוצרים — אפשר לחפש גם לפי סוג המתכון בלבד.</small>}</div>
+          <div className="suggestion-row"><b>הוספה מהירה:</b>{ingredientSuggestions.map((ingredient) => <button type="button" key={ingredient} disabled={form.ingredients.includes(ingredient) || form.ingredients.length >= 5} onClick={() => addIngredient(ingredient)}>{ingredient}</button>)}</div>
+        </div>
+        <div className="section-heading restrictions-title"><span>3</span><div><h2>העדפות ורגישויות</h2><p>רגישות מחמירה מסננת רכיבים ברורים, אך אינה מחליפה בדיקה רפואית</p></div></div>
         <div className="restriction-grid">{(Object.keys(restrictionLabels) as RestrictionKey[]).map((key) => <div className={`restriction-card ${form.restrictions[key] !== "off" ? "active" : ""}`} key={key}><div><b>{restrictionLabels[key].title}</b><small>{restrictionLabels[key].note}</small></div><select aria-label={`רמת ${restrictionLabels[key].title}`} value={form.restrictions[key]} onChange={(event) => setForm({ ...form, restrictions: { ...form.restrictions, [key]: event.target.value as RestrictionMode } })}><option value="off">לא נדרש</option><option value="preference">העדפה</option><option value="strict">רגישות / אלרגיה</option></select></div>)}</div>
-        <button className="primary-button" disabled={loading} type="submit">{loading ? <LoaderCircle className="spin" size={19} /> : <Search size={19} />}{loading ? "מחפש ומתאים..." : "מצא לי מתכונים"}</button>
+        <button className="primary-button" disabled={loading} type="submit">{loading ? <LoaderCircle className="spin" size={19} /> : <Search size={19} />}{loading ? "מחפש ומתאים..." : "מצא מתכונים לפי הבחירות"}</button>
       </form>
 
       <section className="results-section no-print" aria-live="polite">
         {error && <div className="error-banner"><AlertTriangle size={20} />{error}</div>}
         {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">תוצאות מהעולם</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>הכותרות תורגמו אוטומטית. תמיד בדוק את המקור.</p></div>}
-        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>{meal.strArea || meal.strCountry || "מטבח עולמי"}</span></div><div className="recipe-card-body"><p className="source-title">{meal.strMeal}</p><h3>{titles[meal.idMeal] || meal.strMeal}</h3><div className="meta-row"><span><BookOpen size={14} />{meal.strCategory || "מתכון"}</span><span><Clock3 size={14} />זמן לא צוין</span></div>{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? `נדרשת בדיקה: ${hits.slice(0, 2).join(", ")}` : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
+        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>{meal.strArea || meal.strCountry || "מטבח עולמי"}</span></div><div className="recipe-card-body"><p className="source-title">{meal.strMeal}</p><h3>{titles[meal.idMeal] || meal.strMeal}</h3><div className="meta-row"><span><BookOpen size={14} />{meal.strCategory || "מתכון"}</span><span><Clock3 size={14} />זמן לא צוין</span></div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? `נדרשת בדיקה: ${hits.slice(0, 2).join(", ")}` : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
         {meals.length > 0 && visibleMeals.length === 0 && <div className="empty-state"><Fish size={32} /><h3>כל התוצאות סוננו בגלל רגישות מחמירה</h3><p>נסה חיפוש אחר או שנה רגישות ל״העדפה״ כדי לראות מתכונים עם אזהרות.</p></div>}
       </section>
 
