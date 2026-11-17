@@ -9,8 +9,9 @@ const NIKIB = "https://nikib.co.il";
 const BBC_GOOD_FOOD = "https://www.bbcgoodfood.com";
 const GO_DAIRY_FREE = "https://godairyfree.org";
 const ISRAELI_WORDPRESS_SOURCES = [
-  { base: "https://www.10dakot.co.il", provider: "מתכונים ב-10 דקות" },
-  { base: "https://www.lichtenstadt.com", provider: "אז מה את עושה כל היום" },
+  { base: "https://www.10dakot.co.il", provider: "מתכונים ב-10 דקות", glutenFree: false },
+  { base: "https://www.lichtenstadt.com", provider: "אז מה את עושה כל היום", glutenFree: false },
+  { base: "https://www.shay-glutenfree.co.il", provider: "שי ללא גלוטן", glutenFree: true },
 ];
 const typeSearch: Record<string, { categories?: string[]; terms?: string[]; he: string; en: string }> = {
   cakes: { terms: ["cake"], he: "עוגה", en: "cake" },
@@ -80,7 +81,7 @@ function matchesRequestedType(meal: Meal, type: string) {
   }
   if (type === "savory_bake") {
     const excludedDish = /salad|sandwich|bruschetta|toast|soup|gazpacho|סלט|כריך|ברוסקטה|טוסט|מרק|גספצ/i.test(title);
-    const bakedForm = /pie|tart|pastry|quiche|bread|focaccia|pizza|calzone|galette|bun|roll|מאפה|פשטידה|קיש|בורקס|טארט|פאי|לחם|לחמנ|פוקאצ|פיצה|קלצונה|גאלט|שבלול/i.test(title);
+    const bakedForm = /pie|tart|pastry|quiche|bread|focaccia|pizza|calzone|galette|bun|roll|empanada|samosa|מאפה|פשטידה|קיש|בורקס|טארט|פאי|לחם|לחמנ|פוקאצ|פיצה|קלצונה|גאלט|שבלול|פטאייר|אמפנדס|לחמג'ון|סמבוסק|סיגר/i.test(title);
     return !isSweet && !excludedDish && bakedForm;
   }
   if (type === "quiche_savory") {
@@ -209,7 +210,7 @@ function publicRecipeUrl(value: string) {
 
 async function searchIsraeliWordpress(query: string) {
   if (!query) return [] as Meal[];
-  const groups = await Promise.all(ISRAELI_WORDPRESS_SOURCES.map(async ({ base, provider }, sourceIndex) => {
+  const groups = await Promise.all(ISRAELI_WORDPRESS_SOURCES.map(async ({ base, provider, glutenFree }, sourceIndex) => {
     try {
       const response = await fetch(`${base}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=8`, {
         headers: { ...browserHeaders, "Accept-Language": "he-IL,he;q=0.9" },
@@ -218,9 +219,9 @@ async function searchIsraeliWordpress(query: string) {
       if (!response.ok) return [] as Meal[];
       const results = await response.json() as Array<{ url?: string }>;
       const urls = results.map((result) => result.url)
-        .filter((url): url is string => Boolean(url && publicRecipeUrl(url))).slice(0, 4);
+        .filter((url): url is string => Boolean(url && publicRecipeUrl(url))).slice(0, glutenFree ? 8 : 4);
       return fetchRecipesFromUrls(urls, (page, url) => parseExternalStructuredRecipe(page, url, {
-        provider, idPrefix: `ilwp-${sourceIndex}`, language: "he",
+        provider, idPrefix: `ilwp-${sourceIndex}`, language: "he", glutenFree,
       }), { ...browserHeaders, "Accept-Language": "he-IL,he;q=0.9" });
     } catch { return [] as Meal[]; }
   }));
@@ -491,6 +492,16 @@ export async function GET(request: Request) {
     const dairyFreePromise = dairyRequested && sourceQueryEn
       ? withDeadline(searchGoDairyFree(sourceQueryEn).catch(() => [] as Meal[]), [] as Meal[])
       : Promise.resolve([] as Meal[]);
+    const supplementalQueries = rawQuery
+      ? [`${rawQuery} ${config.he}`].map((value) => value.trim()).filter((value) => value !== sourceQueryHe)
+      : [];
+    const supplementalPromise = Promise.all(supplementalQueries.map(async (supplementalQuery) => {
+      const [wordpressExtra, hashulchanExtra] = await Promise.all([
+        withDeadline(searchIsraeliWordpress(supplementalQuery).catch(() => [] as Meal[]), [] as Meal[]),
+        withDeadline(searchHashulchan(supplementalQuery, 10).catch(() => [] as Meal[]), [] as Meal[]),
+      ]);
+      return [...wordpressExtra, ...hashulchanExtra];
+    })).then((groups) => groups.flat());
     const summaries = new Map<string, Meal>();
     const candidateScores = new Map<string, number>();
 
@@ -583,8 +594,8 @@ export async function GET(request: Request) {
     );
     const hebrewSourceTerms = rawQuery ? requiredSourceTerms(rawQuery) : [];
     const englishSourceTerms = rawQuery ? strictQueryTerms : [];
-    const [hashulchanRaw, nikibRaw, israeliWordpressRaw, bbcRaw, coeliacRaw, dairyFreeRaw] = await Promise.all([
-      hashulchanPromise, nikibPromise, israeliWordpressPromise, bbcPromise, coeliacPromise, dairyFreePromise,
+    const [hashulchanRaw, nikibRaw, israeliWordpressRaw, bbcRaw, coeliacRaw, dairyFreeRaw, supplementalRaw] = await Promise.all([
+      hashulchanPromise, nikibPromise, israeliWordpressPromise, bbcPromise, coeliacPromise, dairyFreePromise, supplementalPromise,
     ]);
     const filterSource = (meals: Meal[], terms: string[]) => meals.filter((meal) =>
       matchesRequestedType(meal, type) && mealMatchesRequiredTerms(meal, terms),
@@ -595,25 +606,30 @@ export async function GET(request: Request) {
     const coeliacResults = filterSource(coeliacRaw, englishSourceTerms);
     const dairyFreeResults = filterSource(dairyFreeRaw, englishSourceTerms);
     const webResults = filterSource(israeliWordpressRaw, hebrewSourceTerms);
-    const allCandidates = [...hashulchanResults, ...nikibResults, ...bbcResults, ...coeliacResults, ...dairyFreeResults, ...webResults, ...typedResults];
+    const supplementalResults = filterSource(supplementalRaw, hebrewSourceTerms);
+    const allCandidates = [...hashulchanResults, ...nikibResults, ...bbcResults, ...coeliacResults, ...dairyFreeResults, ...webResults, ...supplementalResults, ...typedResults];
     const ingredientMatches: Record<string, number> = {};
-    for (const meal of allCandidates) {
-      const names = normalizeSearchText(Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "").join(" "));
-      ingredientMatches[meal.idMeal] = rawIngredients.reduce((count, ingredient, index) => {
-        const alternatives = [ingredient, requestedIngredients[index] ?? ""].map(normalizeSearchText).filter(Boolean);
-        const found = alternatives.some((term) => {
-          const core = term.length > 3 && term.endsWith("s") ? term.slice(0, -1) : term;
-          return names.includes(term) || names.includes(core);
-        });
-        return count + (found ? 1 : 0);
-      }, 0);
-    }
+    const recordIngredientMatches = (meals: Meal[]) => meals.forEach((meal) => {
+        const names = normalizeSearchText(Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "").join(" "));
+        ingredientMatches[meal.idMeal] = rawIngredients.reduce((count, ingredient, index) => {
+          const alternatives = [ingredient, requestedIngredients[index] ?? ""].map(normalizeSearchText).filter(Boolean);
+          const found = alternatives.some((term) => {
+            const core = term.length > 3 && term.endsWith("s") ? term.slice(0, -1) : term;
+            return names.includes(term) || names.includes(core);
+          });
+          return count + (found ? 1 : 0);
+        }, 0);
+      });
+    recordIngredientMatches(allCandidates);
     const violatesRestriction = (meal: Meal, key: string) => {
       const names = Array.from({ length: 20 }, (_, index) => meal[`strIngredient${index + 1}`] ?? "");
-      if (key === "gluten") return names.some((name) => {
+      if (key === "gluten") {
+        if (meal.strGlutenFreeSource === "true") return false;
+        return names.some((name) => {
         if (/gluten[- ]?free flour|almond flour|coconut flour|rice flour|corn flour|cornstarch|tamari|קמח ללא גלוטן|קמח שקדים|קמח קוקוס|קמח אורז|קמח תירס|קורנפלור|טמארי/i.test(name)) return false;
         return /flour|wheat|bread|breadcrumbs|pasta|spaghetti|noodle|couscous|barley|semolina|soy sauce|tortilla|cracker|pastry|phyllo|filo|puff pastry|קמח|חיטה|לחם|פירורי לחם|פסטה|אטריות|קוסקוס|שעורה|סולת|רוטב סויה|טורטייה|פילו|בצק עלים/i.test(name);
-      });
+        });
+      }
       if (key === "dairy") {
         if (meal.strDairyFreeSource === "true") return false;
         return names.some((name) => {
@@ -624,13 +640,12 @@ export async function GET(request: Request) {
       return names.some((name) => /sugar|honey|syrup|flour|bread|rice|potato|pasta|noodle|couscous|corn|beans|lentil|oats|barley|chocolate|סוכר|דבש|סירופ|קמח|לחם|אורז|תפוח אדמה|פסטה|אטריות|קוסקוס|תירס|שעועית|עדשים|שיבולת שועל|שעורה|שוקולד/i.test(name));
     };
     const glutenExplicit = (meal: Meal) => meal.strGlutenFreeSource === "true" || /ללא גלוטן|gluten[- ]?free|coeliac/i.test(`${meal.strTags ?? ""} ${meal.strMeal}`);
-    const combinedSource = allCandidates
-      .filter((meal) => mandatoryRestrictions.every((key) => !violatesRestriction(meal, key)))
-      .filter((meal) => !mandatoryRestrictions.includes("gluten") || glutenExplicit(meal))
-      .filter((meal) => !rawIngredients.length || rawQuery || (ingredientMatches[meal.idMeal] ?? 0) > 0);
-    const combined = [...combinedSource]
-      .filter((meal, index, list) => list.findIndex((candidate) => normalizeSearchText(candidate.strMeal) === normalizeSearchText(meal.strMeal)) === index)
-      .sort((a, b) => {
+    const finalizeCandidates = (candidates: Meal[]) => candidates
+        .filter((meal) => mandatoryRestrictions.every((key) => !violatesRestriction(meal, key)))
+        .filter((meal) => !mandatoryRestrictions.includes("gluten") || glutenExplicit(meal))
+        .filter((meal) => !rawIngredients.length || rawQuery || (ingredientMatches[meal.idMeal] ?? 0) > 0)
+        .filter((meal, index, list) => list.findIndex((candidate) => normalizeSearchText(candidate.strMeal) === normalizeSearchText(meal.strMeal)) === index)
+        .sort((a, b) => {
         if (rawIngredients.length) {
           const byIngredients = (ingredientMatches[b.idMeal] ?? 0) - (ingredientMatches[a.idMeal] ?? 0);
           if (byIngredients) return byIngredients;
@@ -652,6 +667,7 @@ export async function GET(request: Request) {
         if (bySource) return bySource;
         return b.strMeal.localeCompare(a.strMeal, "he");
       });
+    const combined = finalizeCandidates(allCandidates);
 
     return Response.json(
       {
@@ -664,7 +680,7 @@ export async function GET(request: Request) {
         sourceCounts: {
           hashulchan: hashulchanResults.length, nikib: nikibResults.length, bbcGoodFood: bbcResults.length,
           coeliacUk: coeliacResults.length, goDairyFree: dairyFreeResults.length, web: webResults.length,
-          themealdb: typedResults.length,
+          supplemental: supplementalResults.length, themealdb: typedResults.length,
         },
       },
       { headers: { "Cache-Control": "public, s-maxage=900, stale-while-revalidate=3600" } },
