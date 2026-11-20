@@ -49,7 +49,8 @@ function requiredQueryTerms(query: string) {
 }
 
 function requiredSourceTerms(query: string) {
-  return [...new Set(normalizeSearchText(query).split(" ")
+  const clean = query.replace(/ללא\s+גלוטן|בלי\s+גלוטן|gluten[- ]free/gi, " ");
+  return [...new Set(normalizeSearchText(clean).split(" ")
     .filter((term) => term.length > 1 && !sourceStopWords.has(term)))];
 }
 
@@ -59,7 +60,9 @@ function mealMatchesRequiredTerms(meal: Meal, terms: string[]) {
   const searchable = ` ${normalizeSearchText(`${meal.strMeal} ${ingredients}`)} `;
   return terms.every((term) => {
     const singular = term.length > 3 && term.endsWith("s") ? term.slice(0, -1) : term;
-    return searchable.includes(` ${term} `) || searchable.includes(` ${singular} `);
+    const stem = singular.replace(/(ים|ות|ה|ת)$/u, "");
+    return searchable.includes(` ${term} `) || searchable.includes(` ${singular} `)
+      || (/[א-ת]/u.test(stem) && stem.length >= 3 && searchable.split(" ").some((word) => word.startsWith(stem)));
   });
 }
 
@@ -85,7 +88,7 @@ function matchesRequestedType(meal: Meal, type: string) {
   }
   if (type === "savory_bake") {
     const excludedDish = /salad|sandwich|bruschetta|toast|soup|gazpacho|סלט|כריך|ברוסקטה|טוסט|מרק|גספצ/i.test(title);
-    const bakedForm = /pie|tart|pastry|quiche|casserole|frittata|pudding|bread|focaccia|pizza|calzone|galette|bun|roll|empanada|samosa|מאפה|פשטידה|פריטטה|קיש(?!וא)|בורקס|טארט|פאי|לחם|לחמנ|פוקאצ|פיצה|קלצונה|גאלט|שבלול|פטאייר|אמפנדס|לחמג'ון|סמבוסק|סיגר/i.test(title);
+    const bakedForm = /pie|tart|pastry|quiche|casserole|frittata|pudding|bread|focaccia|pizza|calzone|galette|bun|roll|empanada|samosa|מאפ[הי]|פשטיד|פריטט|קיש(?!וא)|בורקס|טארט|פאי|לחם|לחמנ|פוקאצ|פיצה|קלצונה|גאלט|שבלול|פטאייר|אמפנדס|לחמג'ון|סמבוסק|סיגר/i.test(title);
     return !isSweet && !excludedDish && bakedForm;
   }
   if (type === "salad") return /salad|slaw|coleslaw|tabbouleh|tabouli|fattoush|panzanella|סלט|קולסלאו|טאבולה|פתוש/i.test(title);
@@ -168,7 +171,7 @@ function parseExternalStructuredRecipe(
         ...(options.dairyFree ? { strDairyFreeSource: "true" } : {}),
       };
       recipe.recipeIngredient.map(String).slice(0, 20).forEach((ingredient, index) => {
-        const parsed = splitEnglishIngredient(ingredient);
+        const parsed = options.language === "he" ? splitHebrewIngredient(ingredient) : splitEnglishIngredient(ingredient);
         meal[`strIngredient${index + 1}`] = parsed.name;
         meal[`strMeasure${index + 1}`] = parsed.measure;
       });
@@ -204,20 +207,32 @@ async function searchIsraeliWordpress(query: string) {
   if (!query) return [] as Meal[];
   const groups = await Promise.all(ISRAELI_WORDPRESS_SOURCES.map(async ({ base, provider, glutenFree }, sourceIndex) => {
     try {
-      const response = await fetch(`${base}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=12`, {
+      const response = await fetch(`${base}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=100`, {
         headers: { ...browserHeaders, "Accept-Language": "he-IL,he;q=0.9" },
         signal: AbortSignal.timeout(6_000),
       });
       if (!response.ok) return [] as Meal[];
-      const results = await response.json() as Array<{ url?: string }>;
-      const urls = results.map((result) => result.url)
-        .filter((url): url is string => Boolean(url && publicRecipeUrl(url))).slice(0, glutenFree ? 12 : 8);
+      const results = await response.json() as Array<{ url?: string; title?: string }>;
+      const urls = results.sort((a, b) => Number(/פשטיד|מאפ|קיש|סלט|טארט|עוג|מתכון/i.test(b.title ?? "")) - Number(/פשטיד|מאפ|קיש|סלט|טארט|עוג|מתכון/i.test(a.title ?? ""))).map((result) => result.url)
+        .filter((url): url is string => Boolean(url && publicRecipeUrl(url))).slice(0, 10);
       return fetchRecipesFromUrls(urls, (page, url) => parseExternalStructuredRecipe(page, url, {
         provider, idPrefix: `ilwp-${sourceIndex}`, language: "he", glutenFree,
       }), { ...browserHeaders, "Accept-Language": "he-IL,he;q=0.9" });
     } catch { return [] as Meal[]; }
   }));
   return groups.flat();
+}
+
+async function searchMeteg(query: string) {
+  if (!query) return [] as Meal[];
+  try {
+    const response = await fetch(`https://www.meteg.co.il/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=100`, { headers: browserHeaders, signal: AbortSignal.timeout(7_000) });
+    if (!response.ok) return [] as Meal[];
+    const results = await response.json() as Array<{ url?: string; title?: string }>;
+    const urls = results.filter((result) => /פשטיד|מאפ|קיש|סלט|טארט|עוג|מתכון/i.test(result.title ?? ""))
+      .map((result) => result.url).filter((url): url is string => Boolean(url && publicRecipeUrl(url))).slice(0, 10);
+    return fetchRecipesFromUrls(urls, (page, url) => parseExternalStructuredRecipe(page, url, { provider: "מתג", idPrefix: "meteg", language: "he" }));
+  } catch { return [] as Meal[]; }
 }
 
 async function searchCoeliacUk(query: string) {
@@ -353,7 +368,7 @@ function hashId(value: string) {
 }
 
 function splitHebrewIngredient(value: string) {
-  const match = value.trim().match(/^([\d\s./¼½¾⅓⅔]+(?:גרם|ק״ג|ק"ג|קג|מ״ל|מ"ל|ליטר|כוסות?|כפות?|כפיות?|יחידות?|גביע(?:ים)?|חבילות?)?(?:\s*\([^)]*\))?)\s+(.+)$/i);
+  const match = value.trim().match(/^([\d\s./¼½¾⅓⅔-]+(?:גרם|גר['׳]|ק״ג|ק"ג|קג|מ״ל|מ"ל|ליטר|כוסות?|כפות?|כפיות?|יחידות?|גביע(?:ים)?|חבילות?)?(?:\s*\([^)]*\))?)\s+(.+)$/i);
   return match ? { measure: match[1].trim(), name: match[2].trim() } : { measure: "", name: value.trim() };
 }
 
@@ -449,6 +464,7 @@ export async function GET(request: Request) {
     .filter(Boolean)
     .slice(0, 5);
   const restrictionEntries = (searchParams.get("restrictions") || "").split("|").filter(Boolean);
+  if (/ללא\s+גלוטן|בלי\s+גלוטן|gluten[- ]free/i.test(rawQuery) && !restrictionEntries.some((entry) => entry.startsWith("gluten:"))) restrictionEntries.push("gluten:strict");
   const mandatoryRestrictions = restrictionEntries.filter((item) => {
     const [key, mode] = item.split(":");
     return (key === "gluten" && mode !== "off") || ((key === "dairy" || key === "lowcarb") && mode === "strict");
@@ -457,8 +473,9 @@ export async function GET(request: Request) {
   const config = typeSearch[type] ?? typeSearch.fish;
 
   try {
+    const cleanQuery = rawQuery.replace(/ללא\s+גלוטן|בלי\s+גלוטן|gluten[- ]free/gi, " ").trim();
     const [translatedQuery, ...translatedIngredients] = await Promise.all([
-      rawQuery && sourceLanguage !== "en" ? translateText(rawQuery, sourceLanguage, "en") : Promise.resolve(rawQuery),
+      cleanQuery && sourceLanguage !== "en" ? translateText(cleanQuery, sourceLanguage, "en") : Promise.resolve(cleanQuery),
       ...rawIngredients.map((ingredient) => sourceLanguage === "en"
         ? Promise.resolve(ingredient) : translateText(ingredient, sourceLanguage, "en")),
     ]);
@@ -484,15 +501,18 @@ export async function GET(request: Request) {
     const dairyFreePromise = dairyRequested && sourceQueryEn
       ? withDeadline(searchGoDairyFree(sourceQueryEn).catch(() => [] as Meal[]), [] as Meal[])
       : Promise.resolve([] as Meal[]);
-    const supplementalQueries = rawQuery
-      ? [`${rawQuery} ${config.he}`].map((value) => value.trim()).filter((value) => value !== sourceQueryHe)
-      : [];
+    const termsHe = requiredSourceTerms(rawQuery);
+    const metegPromise = Promise.all(termsHe.slice(0, 2).map((term) => withDeadline(searchMeteg(term.replace(/(ים|ות)$/u, "")), [] as Meal[], 12_000))).then((groups) => groups.flat());
+    const supplementalQueries = [...new Set([
+      termsHe.join(" "), ...termsHe, ...termsHe.map((term) => term.replace(/(ים|ות)$/u, "")),
+    ].filter((value) => value && value !== sourceQueryHe))].slice(0, 6);
     const supplementalPromise = Promise.all(supplementalQueries.map(async (supplementalQuery) => {
-      const [wordpressExtra, hashulchanExtra] = await Promise.all([
+      const [wordpressExtra, hashulchanExtra, nikibExtra] = await Promise.all([
         withDeadline(searchIsraeliWordpress(supplementalQuery).catch(() => [] as Meal[]), [] as Meal[]),
         withDeadline(searchHashulchan(supplementalQuery, 16).catch(() => [] as Meal[]), [] as Meal[]),
+        withDeadline(searchNikib(supplementalQuery).catch(() => [] as Meal[]), [] as Meal[]),
       ]);
-      return [...wordpressExtra, ...hashulchanExtra];
+      return [...wordpressExtra, ...hashulchanExtra, ...nikibExtra];
     })).then((groups) => groups.flat());
     const summaries = new Map<string, Meal>();
     const candidateScores = new Map<string, number>();
@@ -590,8 +610,8 @@ export async function GET(request: Request) {
     );
     const hebrewSourceTerms = rawQuery ? requiredSourceTerms(rawQuery) : [];
     const englishSourceTerms = rawQuery ? strictQueryTerms : [];
-    const [hashulchanRaw, nikibRaw, israeliWordpressRaw, bbcRaw, coeliacRaw, dairyFreeRaw, supplementalRaw] = await Promise.all([
-      hashulchanPromise, nikibPromise, israeliWordpressPromise, bbcPromise, coeliacPromise, dairyFreePromise, supplementalPromise,
+    const [hashulchanRaw, nikibRaw, israeliWordpressRaw, bbcRaw, coeliacRaw, dairyFreeRaw, supplementalRaw, metegRaw] = await Promise.all([
+      hashulchanPromise, nikibPromise, israeliWordpressPromise, bbcPromise, coeliacPromise, dairyFreePromise, supplementalPromise, metegPromise,
     ]);
     const filterSource = (meals: Meal[], terms: string[]) => meals.filter((meal) =>
       matchesRequestedType(meal, type) && mealMatchesRequiredTerms(meal, terms),
@@ -602,7 +622,7 @@ export async function GET(request: Request) {
     const coeliacResults = filterSource(coeliacRaw, englishSourceTerms);
     const dairyFreeResults = filterSource(dairyFreeRaw, englishSourceTerms);
     const webResults = filterSource(israeliWordpressRaw, hebrewSourceTerms);
-    const supplementalResults = filterSource(supplementalRaw, hebrewSourceTerms);
+    const supplementalResults = filterSource([...supplementalRaw, ...metegRaw], hebrewSourceTerms);
     const allCandidates = [...hashulchanResults, ...nikibResults, ...bbcResults, ...coeliacResults, ...dairyFreeResults, ...webResults, ...supplementalResults, ...typedResults];
     const ingredientMatches: Record<string, number> = {};
     const recordIngredientMatches = (meals: Meal[]) => meals.forEach((meal) => {
@@ -679,7 +699,7 @@ export async function GET(request: Request) {
           supplemental: supplementalResults.length, themealdb: typedResults.length,
         },
       },
-      { headers: { "Cache-Control": "public, s-maxage=900, stale-while-revalidate=3600" } },
+      { headers: { "Cache-Control": combined.length ? "public, s-maxage=900, stale-while-revalidate=3600" : "no-store" } },
     );
   } catch {
     return Response.json(

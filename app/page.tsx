@@ -177,7 +177,7 @@ export default function Home() {
     event.preventDefault(); setLoading(true); setError(""); setSelected(null); setTranslatingTitles(false);
     try {
       const params = new URLSearchParams({
-        v: "13",
+        v: "14",
         type: form.type, query: form.query, language: form.language,
         ingredients: form.ingredients.join("|"),
         restrictions: Object.entries(form.restrictions).filter(([, mode]) => mode !== "off").map(([key, mode]) => `${key}:${mode}`).join("|"),
