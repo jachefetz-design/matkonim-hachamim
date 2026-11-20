@@ -17,11 +17,13 @@ const typeSearch: Record<string, { categories?: string[]; terms?: string[]; he: 
   cakes: { terms: ["cake"], he: "עוגה", en: "cake" },
   meat: { categories: ["Beef", "Chicken", "Lamb"], he: "מתכון בשר", en: "meat recipe" },
   fish: { categories: ["Seafood"], he: "מתכון דגים", en: "fish recipe" },
-  sweet_bake: { categories: ["Dessert"], he: "מאפה מתוק", en: "sweet bake pastry" },
-  savory_bake: { terms: ["pie", "tart"], he: "מאפה מלוח", en: "savory bake pastry" },
-  quiche_savory: { terms: ["quiche", "savory tart"], he: "קיש", en: "quiche savory tart" },
-  savory_casserole: { terms: ["casserole", "frittata"], he: "פשטידה מלוחה", en: "savory casserole frittata" },
-  pie_sweet: { terms: ["pie", "tart"], categories: ["Dessert"], he: "פאי טארט מתוק", en: "sweet pie tart" },
+  sweet_bake: { terms: ["pie", "tart", "pastry"], categories: ["Dessert"], he: "מאפה מתוק טארט", en: "sweet pastry tart" },
+  savory_bake: {
+    terms: ["pie", "tart", "quiche", "casserole", "frittata", "pastry"],
+    categories: ["Vegetarian", "Chicken", "Beef", "Side", "Starter", "Breakfast", "Miscellaneous"],
+    he: "מאפה מלוח", en: "savory pastry",
+  },
+  salad: { terms: ["salad"], categories: ["Starter", "Side", "Vegetarian", "Vegan"], he: "סלט", en: "salad" },
 };
 
 type Meal = Record<string, string | null> & { idMeal: string; strMeal: string };
@@ -29,11 +31,11 @@ type Meal = Record<string, string | null> & { idMeal: string; strMeal: string };
 const queryStopWords = new Set([
   "a", "an", "and", "the", "with", "without", "in", "on", "for", "of", "to",
   "recipe", "dish", "meal", "oven", "baked", "bake", "sweet", "savory", "savoury",
-  "cake", "cakes", "pie", "pies", "tart", "tarts", "quiche", "pastry",
+  "cake", "cakes", "pie", "pies", "tart", "tarts", "quiche", "pastry", "salad", "slaw",
 ]);
 const sourceStopWords = new Set([
   "של", "עם", "בלי", "ללא", "מתכון", "מתכונים", "בתנור", "אפוי", "אפויה", "מתוק", "מתוקה", "מלוח", "מלוחה",
-  "עוגה", "עוגת", "עוגות", "מאפה", "מאפים", "פאי", "טארט", "קיש", "פשטידה", "פשטידת",
+  "עוגה", "עוגת", "עוגות", "מאפה", "מאפים", "פאי", "טארט", "קיש", "פשטידה", "פשטידת", "סלט",
 ]);
 
 function normalizeSearchText(value: string) {
@@ -69,10 +71,12 @@ function matchesRequestedType(meal: Meal, type: string) {
     .join(" ")
     .toLowerCase();
   const all = `${title} ${category} ${tags} ${ingredients}`;
-  const instructions = (meal.strInstructions ?? "").toLowerCase();
-  const sweetSignals = /dessert|sweet|cake|chocolate|cocoa|custard|jam|caramel|apple|berry|strawberry|blueberry|raspberry|cherry|banana|lemon curd|treacle|קינוח|מתוק|עוג|שוקולד|קקאו|ריבה|קרמל|תפוח|תות|דובדבן|בננה/i;
-  const savorySignals = /beef|chicken|lamb|pork|fish|salmon|tuna|cheese|onion|garlic|spinach|mushroom|tomato|potato|leek|broccoli|zucchini|courgette|בשר|עוף|טלה|דג|סלמון|טונה|גבינ|בצל|שום|תרד|פטריות|עגבני|תפוח אדמה|כרישה|ברוקולי|קישוא/i;
-  const isSweet = category === "dessert" || sweetSignals.test(`${title} ${category} ${tags}`);
+  const explicitSweetSignals = /dessert|sweet|cake|cookie|biscuit|brownie|muffin|chocolate|cocoa|custard|jam|caramel|honey|sugar|treacle|קינוח|מתוק|עוג|עוגי|בראוני|מאפין|שוקולד|קקאו|ריבה|קרמל|דבש|סוכר/i;
+  const fruitSweetSignals = /apple|berry|strawberry|blueberry|raspberry|cherry|banana|pear|peach|apricot|plum|lemon|lime|orange|תפוח|תות|דובדבן|בננה|אגס|אפרסק|משמש|שזיף|לימון|ליים|תפוז/i;
+  const savorySignals = /beef|chicken|lamb|pork|fish|salmon|tuna|cheese|onion|garlic|spinach|mushroom|tomato|potato|leek|broccoli|zucchini|courgette|בשר|עוף|טלה|דג|סלמון|טונה|גבינ|בצל|שום|תרד|פטריות|עגבני|תפוח אדמה|כרש|ברוקולי|קישוא/i;
+  const titleAndTags = `${title} ${tags}`;
+  const isSweet = category === "dessert" || explicitSweetSignals.test(titleAndTags)
+    || (fruitSweetSignals.test(titleAndTags) && !savorySignals.test(titleAndTags));
 
   if (type === "cakes") return /cakes?|עוגה|עוגת|עוגות|קייק/i.test(title);
   if (type === "sweet_bake") {
@@ -81,22 +85,10 @@ function matchesRequestedType(meal: Meal, type: string) {
   }
   if (type === "savory_bake") {
     const excludedDish = /salad|sandwich|bruschetta|toast|soup|gazpacho|סלט|כריך|ברוסקטה|טוסט|מרק|גספצ/i.test(title);
-    const bakedForm = /pie|tart|pastry|quiche|bread|focaccia|pizza|calzone|galette|bun|roll|empanada|samosa|מאפה|פשטידה|קיש|בורקס|טארט|פאי|לחם|לחמנ|פוקאצ|פיצה|קלצונה|גאלט|שבלול|פטאייר|אמפנדס|לחמג'ון|סמבוסק|סיגר/i.test(title);
+    const bakedForm = /pie|tart|pastry|quiche|casserole|frittata|pudding|bread|focaccia|pizza|calzone|galette|bun|roll|empanada|samosa|מאפה|פשטידה|פריטטה|קיש(?!וא)|בורקס|טארט|פאי|לחם|לחמנ|פוקאצ|פיצה|קלצונה|גאלט|שבלול|פטאייר|אמפנדס|לחמג'ון|סמבוסק|סיגר/i.test(title);
     return !isSweet && !excludedDish && bakedForm;
   }
-  if (type === "quiche_savory") {
-    const quicheForm = /quiche|savory tart|קיש|טארט מלוח/i.test(title);
-    const bakedBase = /pastry|crust|dough|flour|shortcrust|בצק|קלתית|קמח|פריך/i.test(`${ingredients} ${instructions}`);
-    return !isSweet && quicheForm && bakedBase;
-  }
-  if (type === "savory_casserole") {
-    const casseroleForm = /casserole|frittata|pudding|פשטידה|פשטידת|פריטטה/i.test(title);
-    const bakedBase = /pastry|crust|dough|shortcrust|בצק|קלתית/i.test(`${ingredients} ${instructions}`);
-    return !isSweet && casseroleForm && !bakedBase;
-  }
-  if (type === "pie_sweet") {
-    return isSweet && /pie|tart|pudding|פאי|טארט|פשטידה/i.test(title);
-  }
+  if (type === "salad") return /salad|slaw|coleslaw|tabbouleh|tabouli|fattoush|panzanella|סלט|קולסלאו|טאבולה|פתוש/i.test(title);
   if (type === "meat") return /beef|chicken|lamb|pork|meat|בשר|בקר|עוף|טלה|פרגית/i.test(all);
   if (type === "fish") return /fish|salmon|tuna|cod|seafood|דג|סלמון|טונה|בקלה/i.test(all);
   return true;
@@ -212,14 +204,14 @@ async function searchIsraeliWordpress(query: string) {
   if (!query) return [] as Meal[];
   const groups = await Promise.all(ISRAELI_WORDPRESS_SOURCES.map(async ({ base, provider, glutenFree }, sourceIndex) => {
     try {
-      const response = await fetch(`${base}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=8`, {
+      const response = await fetch(`${base}/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=12`, {
         headers: { ...browserHeaders, "Accept-Language": "he-IL,he;q=0.9" },
         signal: AbortSignal.timeout(6_000),
       });
       if (!response.ok) return [] as Meal[];
       const results = await response.json() as Array<{ url?: string }>;
       const urls = results.map((result) => result.url)
-        .filter((url): url is string => Boolean(url && publicRecipeUrl(url))).slice(0, glutenFree ? 8 : 4);
+        .filter((url): url is string => Boolean(url && publicRecipeUrl(url))).slice(0, glutenFree ? 12 : 8);
       return fetchRecipesFromUrls(urls, (page, url) => parseExternalStructuredRecipe(page, url, {
         provider, idPrefix: `ilwp-${sourceIndex}`, language: "he", glutenFree,
       }), { ...browserHeaders, "Accept-Language": "he-IL,he;q=0.9" });
@@ -254,7 +246,7 @@ async function fetchRecipesFromUrls(
   parser: (html: string, url: string) => Meal | null,
   headers: Record<string, string> = browserHeaders,
 ) {
-  const batch = await Promise.all(urls.slice(0, 6).map(async (url) => {
+  const batch = await Promise.all(urls.slice(0, 10).map(async (url) => {
     try {
       const response = await fetch(url, { headers, signal: AbortSignal.timeout(5_500) });
       return response.ok ? parser(await response.text(), url) : null;
@@ -277,7 +269,7 @@ async function searchBbcGoodFood(query: string) {
     const html = await response.text();
     const urls = [...new Set([...html.matchAll(/href=["'](https:\/\/www\.bbcgoodfood\.com\/recipes\/[^"'#?]+)["']/gi)]
       .map((match) => decodeHtml(match[1]))
-      .filter((url) => !url.includes("/collection/") && !url.includes("/category/")))].slice(0, 10);
+      .filter((url) => !url.includes("/collection/") && !url.includes("/category/")))].slice(0, 16);
     return fetchRecipesFromUrls(urls, (page, url) => parseExternalStructuredRecipe(page, url, {
       provider: "BBC Good Food", idPrefix: "bbc",
     }));
@@ -293,7 +285,7 @@ async function searchGoDairyFree(query: string) {
     });
     if (!response.ok) return [] as Meal[];
     const results = await response.json() as Array<{ url?: string }>;
-    const urls = results.map((result) => result.url).filter((url): url is string => Boolean(url)).slice(0, 10);
+    const urls = results.map((result) => result.url).filter((url): url is string => Boolean(url)).slice(0, 16);
     return fetchRecipesFromUrls(urls, (page, url) => parseExternalStructuredRecipe(page, url, {
       provider: "Go Dairy Free", idPrefix: "gdf", tags: "dairy-free,lactose-free", dairyFree: true,
     }));
@@ -330,7 +322,7 @@ async function searchNikib(query: string) {
   if (!query) return [] as Meal[];
   const headers = { ...browserHeaders, "Accept-Language": "he-IL,he;q=0.9" };
   try {
-    const pages = await Promise.all([1, 2].map(async (page) => {
+    const pages = await Promise.all([1, 2, 3].map(async (page) => {
       const url = page === 1 ? `${NIKIB}/?s=${encodeURIComponent(query)}` : `${NIKIB}/page/${page}/?s=${encodeURIComponent(query)}`;
       try {
         const response = await fetch(url, { headers, signal: AbortSignal.timeout(14_000) });
@@ -339,7 +331,7 @@ async function searchNikib(query: string) {
     }));
     const urls = [...new Set(pages.flatMap((html) => [...html.matchAll(/href=["'](https:\/\/nikib\.co\.il\/[^"']+)["']/gi)]
       .map((match) => decodeHtml(match[1])))
-      .filter((url) => /\/\d+\/?(?:[#?].*)?$/.test(url)))].slice(0, 10);
+      .filter((url) => /\/\d+\/?(?:[#?].*)?$/.test(url)))].slice(0, 16);
     return fetchRecipesFromUrls(urls, parseNikibRecipe, headers);
   } catch { return [] as Meal[]; }
 }
@@ -480,7 +472,7 @@ export async function GET(request: Request) {
 
     // Start all independent providers together. Slow or unavailable sources
     // return an empty list without blocking results from the others.
-    const hashulchanPromise = sourceQueryHe ? withDeadline(searchHashulchan(sourceQueryHe, 14).catch(() => [] as Meal[]), [] as Meal[]) : Promise.resolve([] as Meal[]);
+    const hashulchanPromise = sourceQueryHe ? withDeadline(searchHashulchan(sourceQueryHe, 24).catch(() => [] as Meal[]), [] as Meal[]) : Promise.resolve([] as Meal[]);
     const nikibPromise = sourceQueryHe ? withDeadline(searchNikib(sourceQueryHe).catch(() => [] as Meal[]), [] as Meal[]) : Promise.resolve([] as Meal[]);
     const israeliWordpressPromise = sourceQueryHe
       ? withDeadline(searchIsraeliWordpress(sourceQueryHe).catch(() => [] as Meal[]), [] as Meal[])
@@ -498,7 +490,7 @@ export async function GET(request: Request) {
     const supplementalPromise = Promise.all(supplementalQueries.map(async (supplementalQuery) => {
       const [wordpressExtra, hashulchanExtra] = await Promise.all([
         withDeadline(searchIsraeliWordpress(supplementalQuery).catch(() => [] as Meal[]), [] as Meal[]),
-        withDeadline(searchHashulchan(supplementalQuery, 10).catch(() => [] as Meal[]), [] as Meal[]),
+        withDeadline(searchHashulchan(supplementalQuery, 16).catch(() => [] as Meal[]), [] as Meal[]),
       ]);
       return [...wordpressExtra, ...hashulchanExtra];
     })).then((groups) => groups.flat());
@@ -545,15 +537,17 @@ export async function GET(request: Request) {
     // Category/term matches receive extra score, while products still determine
     // which candidates rise to the top within that type.
     if (!query && summaries.size) {
-      for (const category of config.categories ?? []) {
-        const payload = await safeGetJson(`${API}/filter.php?c=${encodeURIComponent(category)}`);
+      const [categoryPayloads, termPayloads] = await Promise.all([
+        Promise.all((config.categories ?? []).map((category) => safeGetJson(`${API}/filter.php?c=${encodeURIComponent(category)}`))),
+        Promise.all((config.terms ?? []).map((term) => safeGetJson(`${API}/search.php?s=${encodeURIComponent(term)}`))),
+      ]);
+      for (const payload of categoryPayloads) {
         for (const meal of (payload.meals ?? []).slice(0, 12)) {
           summaries.set(meal.idMeal, meal);
           candidateScores.set(meal.idMeal, (candidateScores.get(meal.idMeal) ?? 0) + 1);
         }
       }
-      for (const term of config.terms ?? []) {
-        const payload = await safeGetJson(`${API}/search.php?s=${encodeURIComponent(term)}`);
+      for (const payload of termPayloads) {
         for (const meal of payload.meals ?? []) {
           summaries.set(meal.idMeal, meal);
           candidateScores.set(meal.idMeal, (candidateScores.get(meal.idMeal) ?? 0) + 5);
@@ -562,15 +556,17 @@ export async function GET(request: Request) {
     }
 
     if (!summaries.size) {
-      for (const category of config.categories ?? []) {
-        const payload = await safeGetJson(`${API}/filter.php?c=${encodeURIComponent(category)}`);
+      const [categoryPayloads, termPayloads] = await Promise.all([
+        Promise.all((config.categories ?? []).map((category) => safeGetJson(`${API}/filter.php?c=${encodeURIComponent(category)}`))),
+        Promise.all((config.terms ?? []).map((term) => safeGetJson(`${API}/search.php?s=${encodeURIComponent(term)}`))),
+      ]);
+      for (const payload of categoryPayloads) {
         for (const meal of (payload.meals ?? []).slice(0, 8)) {
           summaries.set(meal.idMeal, meal);
           candidateScores.set(meal.idMeal, 1);
         }
       }
-      for (const term of config.terms ?? []) {
-        const payload = await safeGetJson(`${API}/search.php?s=${encodeURIComponent(term)}`);
+      for (const payload of termPayloads) {
         for (const meal of payload.meals ?? []) {
           summaries.set(meal.idMeal, meal);
           candidateScores.set(meal.idMeal, 2);
@@ -580,7 +576,7 @@ export async function GET(request: Request) {
 
     const chosen = [...summaries.values()]
       .sort((a, b) => (candidateScores.get(b.idMeal) ?? 0) - (candidateScores.get(a.idMeal) ?? 0))
-      .slice(0, query ? 24 : 14);
+      .slice(0, 48);
     const details = await Promise.all(
       chosen.map((meal) =>
         meal.strInstructions ? Promise.resolve(meal) : lookup(meal.idMeal).catch(() => null),
@@ -640,12 +636,16 @@ export async function GET(request: Request) {
       return names.some((name) => /sugar|honey|syrup|flour|bread|rice|potato|pasta|noodle|couscous|corn|beans|lentil|oats|barley|chocolate|סוכר|דבש|סירופ|קמח|לחם|אורז|תפוח אדמה|פסטה|אטריות|קוסקוס|תירס|שעועית|עדשים|שיבולת שועל|שעורה|שוקולד/i.test(name));
     };
     const glutenExplicit = (meal: Meal) => meal.strGlutenFreeSource === "true" || /ללא גלוטן|gluten[- ]?free|coeliac/i.test(`${meal.strTags ?? ""} ${meal.strMeal}`);
+    const ratingCount = (meal: Meal) => Math.max(0, Number(String(meal.ratingCount ?? "0").replace(/[^\d.]/g, "")) || 0);
     const finalizeCandidates = (candidates: Meal[]) => candidates
         .filter((meal) => mandatoryRestrictions.every((key) => !violatesRestriction(meal, key)))
         .filter((meal) => !mandatoryRestrictions.includes("gluten") || glutenExplicit(meal))
         .filter((meal) => !rawIngredients.length || rawQuery || (ingredientMatches[meal.idMeal] ?? 0) > 0)
+        .sort((a, b) => ratingCount(b) - ratingCount(a))
         .filter((meal, index, list) => list.findIndex((candidate) => normalizeSearchText(candidate.strMeal) === normalizeSearchText(meal.strMeal)) === index)
         .sort((a, b) => {
+        const byComments = ratingCount(b) - ratingCount(a);
+        if (byComments) return byComments;
         if (rawIngredients.length) {
           const byIngredients = (ingredientMatches[b.idMeal] ?? 0) - (ingredientMatches[a.idMeal] ?? 0);
           if (byIngredients) return byIngredients;
@@ -656,12 +656,8 @@ export async function GET(request: Request) {
           if (meal.strProvider === "השולחן" || meal.strProvider === "ניקי ב") return 2;
           return 1;
         };
-        const ratingScore = (meal: Meal) => {
-          const count = Math.max(0, Number(meal.ratingCount ?? 0) || 0);
-          const value = Math.max(0, Number(meal.ratingValue ?? 0) || 0);
-          return value * 2 + Math.log10(count + 1) * 3;
-        };
-        const byRating = ratingScore(b) - ratingScore(a);
+        const ratingValue = (meal: Meal) => Math.max(0, Number(meal.ratingValue ?? 0) || 0);
+        const byRating = ratingValue(b) - ratingValue(a);
         if (byRating) return byRating;
         const bySource = sourcePriority(b) - sourcePriority(a);
         if (bySource) return bySource;
@@ -671,7 +667,7 @@ export async function GET(request: Request) {
 
     return Response.json(
       {
-        meals: combined.slice(0, 10),
+        meals: combined.slice(0, 15),
         query: query || null,
         requiredQueryTerms: strictQueryTerms,
         requestedIngredients,

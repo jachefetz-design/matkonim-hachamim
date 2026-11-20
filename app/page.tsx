@@ -23,13 +23,11 @@ type Ingredient = {
 
 const recipeTypes = [
   { value: "cakes", label: "עוגות", icon: "🎂" },
-  { value: "savory_bake", label: "מאפה מלוח", icon: "🥐" },
-  { value: "sweet_bake", label: "מאפה מתוק", icon: "🍰" },
+  { value: "savory_bake", label: "מאפה / קיש / פשטידה מלוח", icon: "🥐" },
+  { value: "sweet_bake", label: "מאפה / טארט מתוק", icon: "🍰" },
   { value: "meat", label: "בשר", icon: "🥩" },
   { value: "fish", label: "דגים", icon: "🐟" },
-  { value: "quiche_savory", label: "קיש — עם בסיס בצק", icon: "🥧" },
-  { value: "savory_casserole", label: "פשטידה מלוחה — ללא בסיס", icon: "🍲" },
-  { value: "pie_sweet", label: "פשטידה או טארט מתוק", icon: "🍮" },
+  { value: "salad", label: "סלט", icon: "🥗" },
 ];
 const ingredientSuggestions = ["קמח", "ביצים", "גבינה", "עגבניות", "קישואים", "תרד", "שמנת", "עוף"];
 const languages = [
@@ -58,6 +56,9 @@ function mealIngredients(meal: Meal) {
     const measure = meal[`strMeasure${index + 1}`]?.trim() ?? "";
     return name ? { name, measure } : null;
   }).filter((item): item is { name: string; measure: string } => Boolean(item));
+}
+function mealRatingCount(meal: Meal) {
+  return Math.max(0, Number(String(meal.ratingCount ?? "0").replace(/[^\d.]/g, "")) || 0);
 }
 function restrictionHits(meal: Meal, key: RestrictionKey) {
   if (key === "gluten" && meal.strGlutenFreeSource === "true") return [];
@@ -176,7 +177,7 @@ export default function Home() {
     event.preventDefault(); setLoading(true); setError(""); setSelected(null); setTranslatingTitles(false);
     try {
       const params = new URLSearchParams({
-        v: "9",
+        v: "13",
         type: form.type, query: form.query, language: form.language,
         ingredients: form.ingredients.join("|"),
         restrictions: Object.entries(form.restrictions).filter(([, mode]) => mode !== "off").map(([key, mode]) => `${key}:${mode}`).join("|"),
@@ -350,8 +351,8 @@ export default function Home() {
 
       <section id="results" className="results-section no-print" aria-live="polite">
         {error && <div className="error-banner"><AlertTriangle size={20} />{error}</div>}
-        {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">התוצאות המתאימות ביותר</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>החיפוש רץ במקביל ב־{activeSourceCount || 1} מקורות. המוצרים שיש בבית משפיעים תחילה על הדירוג, ואחריהם דירוגי הקוראים והתאמה לסוג המתכון.</p></div>}
-        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>{meal.strProvider || "TheMealDB"}</span></div><div className="recipe-card-body"><h3>{meal.strLanguage === "he" ? meal.strMeal : (titles[meal.idMeal] || (translatingTitles ? "מתרגם את שם המתכון..." : "מתכון מהמאגר"))}</h3><div className="meta-row"><span><BookOpen size={14} />{categoryInHebrew(meal.strCategory)}</span><span><Clock3 size={14} />זמן לא צוין</span>{Number(meal.ratingCount || 0) > 0 && <span className="rating-count">★ {Number(meal.ratingValue || 0) > 0 ? `${meal.ratingValue} · ` : ""}{meal.ratingCount} דירוגים</span>}</div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? "נמצאו רכיבים המחייבים בדיקה" : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
+        {meals.length > 0 && <div className="results-head"><div><span className="eyebrow">התוצאות המתאימות ביותר</span><h2>מצאנו {visibleMeals.length} מתכונים לבדיקה</h2></div><p>החיפוש רץ במקביל ב־{activeSourceCount || 1} מקורות ומציג עד 15 אפשרויות. התוצאות ממוינות תחילה לפי מספר התגובות והדירוגים; מתכונים ללא תגובות מופיעים אחריהם.</p></div>}
+        <div className="recipe-grid">{visibleMeals.map((meal) => { const hits = activeRestrictions.flatMap((key) => restrictionHits(meal, key)); const ratingCount = mealRatingCount(meal); return <article className="recipe-card" key={meal.idMeal}><div className="recipe-image"><img src={meal.strMealThumb} alt="" /><span>{meal.strProvider || "TheMealDB"}</span></div><div className="recipe-card-body"><h3>{meal.strLanguage === "he" ? meal.strMeal : (titles[meal.idMeal] || (translatingTitles ? "מתרגם את שם המתכון..." : "מתכון מהמאגר"))}</h3><div className="meta-row"><span><BookOpen size={14} />{categoryInHebrew(meal.strCategory)}</span><span><Clock3 size={14} />זמן לא צוין</span><span className="rating-count">★ {ratingCount > 0 ? `${Number(meal.ratingValue || 0) > 0 ? `${meal.ratingValue} · ` : ""}${ratingCount} תגובות / דירוגים` : "ללא תגובות"}</span></div>{form.ingredients.length > 0 && <div className="match-note"><ShoppingBasket size={14} /> נמצאו {ingredientMatches[meal.idMeal] ?? 0} מתוך {form.ingredients.length} המוצרים שסימנת</div>}{activeRestrictions.length > 0 && <div className={`safety-note ${hits.length ? "warning" : "ok"}`}>{hits.length ? "נמצאו רכיבים המחייבים בדיקה" : "לא זוהה רכיב בעייתי ברור"}</div>}<button onClick={() => chooseMeal(meal)}>בחר והתאם <ChevronLeft size={17} /></button></div></article>; })}</div>
         {meals.length > 0 && visibleMeals.length === 0 && <div className="empty-state"><Fish size={32} /><h3>כל התוצאות סוננו בגלל רגישות מחמירה</h3><p>נסה חיפוש אחר או שנה רגישות ל״העדפה״ כדי לראות מתכונים עם אזהרות.</p></div>}
       </section>
 
